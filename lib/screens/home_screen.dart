@@ -42,6 +42,13 @@ class HomeScreen extends StatelessWidget {
                 gradient: const LinearGradient(
                     colors: [AppColors.primary, Color(0xFF004D40)]),
                 borderRadius: BorderRadius.circular(20),
+                boxShadow: [
+                  BoxShadow(
+                    color: AppColors.primary.withOpacity(0.25),
+                    blurRadius: 12,
+                    offset: const Offset(0, 6),
+                  ),
+                ],
               ),
               child: Row(
                 mainAxisAlignment: MainAxisAlignment.spaceBetween,
@@ -51,16 +58,26 @@ class HomeScreen extends StatelessWidget {
                     children: const [
                       Text("Daily Health Score",
                           style: TextStyle(color: Colors.white70)),
+                      SizedBox(height: 6),
                       Text("85%",
                           style: TextStyle(
                               color: Colors.white,
                               fontSize: 32,
                               fontWeight: FontWeight.bold)),
+                      SizedBox(height: 6),
                       Text("Keep it up!",
                           style: TextStyle(color: Colors.white70)),
                     ],
                   ),
-                  const Icon(Icons.favorite, color: Colors.white, size: 50),
+                  Column(
+                    children: const [
+                      Icon(Icons.favorite, color: Colors.white, size: 44),
+                      SizedBox(height: 8),
+                      Text('Heart Rate',
+                          style: TextStyle(color: Colors.white70)),
+                      Text('72 bpm', style: TextStyle(color: Colors.white)),
+                    ],
+                  ),
                 ],
               ),
             ),

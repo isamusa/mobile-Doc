@@ -29,6 +29,13 @@ class _ChatScreenState extends State<ChatScreen> {
     _speech = stt.SpeechToText();
   }
 
+  @override
+  void dispose() {
+    _controller.dispose();
+    _speech.stop();
+    super.dispose();
+  }
+
   void _listen() async {
     if (!_isListening) {
       bool available = await _speech.initialize();
@@ -78,6 +85,7 @@ class _ChatScreenState extends State<ChatScreen> {
     return Scaffold(
       appBar: AppBar(
         title: const Text("AI Health Assistant"),
+        centerTitle: true,
         actions: [
           TextButton(
             onPressed: () {
@@ -99,7 +107,7 @@ class _ChatScreenState extends State<ChatScreen> {
         children: [
           Expanded(
             child: ListView.builder(
-              padding: const EdgeInsets.all(15),
+              padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
               itemCount: _messages.length,
               itemBuilder: (context, index) {
                 final msg = _messages[index];
@@ -108,13 +116,27 @@ class _ChatScreenState extends State<ChatScreen> {
                   alignment:
                       isUser ? Alignment.centerRight : Alignment.centerLeft,
                   child: Container(
-                    margin: const EdgeInsets.symmetric(vertical: 5),
-                    padding: const EdgeInsets.all(15),
+                    margin: const EdgeInsets.symmetric(vertical: 6),
+                    padding: const EdgeInsets.all(14),
                     constraints: BoxConstraints(
-                        maxWidth: MediaQuery.of(context).size.width * 0.75),
+                        maxWidth: MediaQuery.of(context).size.width * 0.78),
                     decoration: BoxDecoration(
                       color: isUser ? AppColors.userBubble : AppColors.aiBubble,
-                      borderRadius: BorderRadius.circular(15),
+                      borderRadius: BorderRadius.only(
+                        topLeft: const Radius.circular(16),
+                        topRight: const Radius.circular(16),
+                        bottomLeft:
+                            isUser ? const Radius.circular(16) : Radius.zero,
+                        bottomRight:
+                            isUser ? Radius.zero : const Radius.circular(16),
+                      ),
+                      boxShadow: [
+                        BoxShadow(
+                          color: Colors.black.withOpacity(0.04),
+                          blurRadius: 6,
+                          offset: const Offset(0, 3),
+                        )
+                      ],
                     ),
                     child: Text(msg['text']!,
                         style: TextStyle(
@@ -125,7 +147,7 @@ class _ChatScreenState extends State<ChatScreen> {
             ),
           ),
           Container(
-            padding: const EdgeInsets.all(10),
+            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
             color: Colors.white,
             child: Row(
               children: [
@@ -134,28 +156,40 @@ class _ChatScreenState extends State<ChatScreen> {
                   child: CircleAvatar(
                     backgroundColor:
                         _isListening ? Colors.red : Colors.grey.shade200,
-                    radius: 24,
+                    radius: 22,
                     child: Icon(_isListening ? Icons.mic_off : Icons.mic,
                         color: _isListening ? Colors.white : AppColors.primary),
                   ),
                 ),
                 const SizedBox(width: 10),
                 Expanded(
-                  child: TextField(
-                    controller: _controller,
-                    decoration: InputDecoration(
-                      hintText:
-                          _isListening ? "Listening..." : "Ina saurare...",
-                      border: OutlineInputBorder(
-                          borderRadius: BorderRadius.circular(30)),
-                      contentPadding:
-                          const EdgeInsets.symmetric(horizontal: 20),
+                  child: Container(
+                    decoration: BoxDecoration(
+                      color: Colors.grey.shade100,
+                      borderRadius: BorderRadius.circular(28),
+                    ),
+                    padding: const EdgeInsets.symmetric(horizontal: 12),
+                    child: Row(
+                      children: [
+                        Expanded(
+                          child: TextField(
+                            controller: _controller,
+                            decoration: InputDecoration(
+                              hintText: _isListening
+                                  ? "Listening..."
+                                  : "Type a message...",
+                              border: InputBorder.none,
+                            ),
+                          ),
+                        ),
+                        IconButton(
+                          icon:
+                              const Icon(Icons.send, color: AppColors.primary),
+                          onPressed: _sendMessage,
+                        ),
+                      ],
                     ),
                   ),
-                ),
-                IconButton(
-                  icon: const Icon(Icons.send, color: AppColors.primary),
-                  onPressed: _sendMessage,
                 ),
               ],
             ),
