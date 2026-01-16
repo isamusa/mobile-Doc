@@ -90,7 +90,7 @@ class HomeScreen extends StatelessWidget {
                 Expanded(
                   child: _ActionCard(
                     icon: Icons.medical_services_outlined,
-                    title: "Check\nSymptoms",
+                    title: "Check Symptoms",
                     color: const Color.fromARGB(255, 97, 104, 109),
                     iconColor: Colors.blue,
                     onTap: onChatTap,
@@ -100,7 +100,7 @@ class HomeScreen extends StatelessWidget {
                 Expanded(
                   child: _ActionCard(
                     icon: Icons.camera_alt_outlined,
-                    title: "Scan\nDiet",
+                    title: "Scan Diet",
                     color: Colors.orange.shade50,
                     iconColor: Colors.orange,
                     onTap: onDietTap,
