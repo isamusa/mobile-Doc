@@ -1,0 +1,29 @@
+{
+  "project_info": {
+    "project_number": "803322683338",
+    "project_id": "mobile-doc-e4d4f",
+    "storage_bucket": "mobile-doc-e4d4f.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:803322683338:android:234b61170a2bd896d33933",
+        "android_client_info": {
+          "package_name": "com.kaswa.mobile_doc"
+        }
+      },
+      "oauth_client": [],
+      "api_key": [
+        {
+          "current_key": "AIzaSyCOM1kphOt-ZVCe5DWxNY1C2aZF7wLouHk"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": []
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}

@@ -6,7 +6,7 @@ plugins {
 }
 
 android {
-    namespace = "com.example.mobile_doc"
+    namespace = "com.kaswa.mobile_doc"
     compileSdk = flutter.compileSdkVersion
     ndkVersion = flutter.ndkVersion
 
@@ -21,10 +21,11 @@ android {
 
     defaultConfig {
         // TODO: Specify your own unique Application ID (https://developer.android.com/studio/build/application-id.html).
-        applicationId = "com.example.mobile_doc"
+        applicationId = "com.kaswa.mobile_doc"
         // You can update the following values to match your application needs.
         // For more information, see: https://flutter.dev/to/review-gradle-config.
-        minSdk = flutter.minSdkVersion
+        // Set minSdk to 23 to satisfy some plugins (cloud_firestore, etc.)
+        minSdk = 23
         targetSdk = flutter.targetSdkVersion
         versionCode = flutter.versionCode
         versionName = flutter.versionName
@@ -42,3 +43,6 @@ android {
 flutter {
     source = "../.."
 }
+
+// Apply the Google services plugin to generate Firebase resource values from google-services.json
+apply plugin: 'com.google.gms.google-services'

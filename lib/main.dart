@@ -1,12 +1,25 @@
 import 'package:flutter/material.dart';
+import 'package:firebase_core/firebase_core.dart';
+import 'package:firebase_auth/firebase_auth.dart'; // 🔴 Import
 import 'theme/app_theme.dart';
 import 'screens/login_screen.dart';
 import 'screens/home_screen.dart';
 import 'screens/chat_screen.dart';
 import 'screens/diet_scan_screen.dart';
 import 'screens/profile_screen.dart';
+import 'screens/medical_screen.dart';
+import 'services/patient_data_service.dart';
 
-void main() {
+void main() async {
+  WidgetsFlutterBinding.ensureInitialized();
+
+  try {
+    await Firebase.initializeApp();
+    print("✅ Firebase Initialized");
+  } catch (e) {
+    print("⚠️ Firebase Error: $e");
+  }
+
   runApp(const MobileDocApp());
 }
 
@@ -15,16 +28,23 @@ class MobileDocApp extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    // Check if user is already logged in
+    final bool isLoggedIn = FirebaseAuth.instance.currentUser != null;
+
     return MaterialApp(
       title: 'Mobile Doc',
       debugShowCheckedModeBanner: false,
       theme: AppTheme.lightTheme,
-      home: const LoginScreen(),
+      // 🔴 If logged in, go to Main, else Login
+      initialRoute: isLoggedIn ? '/main' : '/',
+      routes: {
+        '/': (context) => const LoginScreen(),
+        '/main': (context) => const MainScreenWrapper(),
+      },
     );
   }
 }
 
-// This wrapper handles the Bottom Navigation
 class MainScreenWrapper extends StatefulWidget {
   const MainScreenWrapper({super.key});
 
@@ -45,8 +65,8 @@ class _MainScreenWrapperState extends State<MainScreenWrapper> {
   Widget build(BuildContext context) {
     final List<Widget> pages = [
       HomeScreen(
-        onChatTap: () => _onItemTapped(1), // Jump to Chat tab
-        onDietTap: () => _onItemTapped(2), // Jump to Diet tab
+        onChatTap: () => _onItemTapped(1),
+        onDietTap: () => _onItemTapped(2),
       ),
       const ChatScreen(),
       const DietScanScreen(),
@@ -54,12 +74,15 @@ class _MainScreenWrapperState extends State<MainScreenWrapper> {
     ];
 
     return Scaffold(
-      body: pages[_selectedIndex],
+      body: IndexedStack(
+        index: _selectedIndex,
+        children: pages,
+      ),
       bottomNavigationBar: NavigationBar(
         selectedIndex: _selectedIndex,
         onDestinationSelected: _onItemTapped,
         backgroundColor: Colors.white,
-        indicatorColor: AppColors.secondary,
+        indicatorColor: AppColors.primary.withOpacity(0.2),
         destinations: const [
           NavigationDestination(
             icon: Icon(Icons.home_outlined),
