@@ -42,7 +42,7 @@
 
 1. **Clone the Repo:**
 ```bash
-git clone https://github.com/yourusername/mobile-doc.git
+git clone https://github.com/isamusa/mobile-doc.git
 cd mobile-doc
 
 ```
