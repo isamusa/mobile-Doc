@@ -4,7 +4,8 @@ import '../services/api_service.dart';
 import '../services/patient_data_service.dart';
 
 class ChatScreen extends StatefulWidget {
-  const ChatScreen({super.key});
+  final String? initialQuery; // 👈 Receives the scan result
+  const ChatScreen({super.key, this.initialQuery});
 
   @override
   State<ChatScreen> createState() => _ChatScreenState();
@@ -14,27 +15,56 @@ class _ChatScreenState extends State<ChatScreen> {
   final TextEditingController _controller = TextEditingController();
   final ScrollController _scrollController = ScrollController();
 
-  // Initial greeting
+  // Unified Message Structure: List of Maps
   List<Map<String, String>> _messages = [
     {
       'sender': 'bot',
       'text':
-          'Sannu! I am Dr. Mobile Doc. I have your medical file with me. How are you feeling right now?'
+          'Sannu! I am Dr. Mobile Doc. I have your medical file. How are you feeling right now?'
     }
   ];
 
   bool _isLoading = false;
-  bool _isListening = false; // For Mic state
+  bool _isListening = false;
   String _patientContextSummary = "Loading Patient File...";
 
   @override
   void initState() {
     super.initState();
     _loadData();
+
+    // 🚀 Handle the Scan Result immediately on load
+    if (widget.initialQuery != null) {
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        _handleInitialMessage(widget.initialQuery!);
+      });
+    }
+  }
+
+  // 🚀 Logic to handle the "Consult Doctor" message automatically
+  void _handleInitialMessage(String msg) async {
+    setState(() {
+      _messages.add({'sender': 'user', 'text': msg});
+      _isLoading = true;
+    });
+    _scrollToBottom();
+
+    try {
+      final response = await ApiService.sendToGemma(msg);
+
+      if (mounted) {
+        setState(() {
+          _messages.add({'sender': 'bot', 'text': response});
+          _isLoading = false;
+        });
+        _scrollToBottom();
+      }
+    } catch (e) {
+      if (mounted) setState(() => _isLoading = false);
+    }
   }
 
   Future<void> _loadData() async {
-    // 1. Load Context info
     String context = await PatientDataService.getContextString();
     String name = "Patient";
     if (context.contains("- Name: ")) {
@@ -43,18 +73,15 @@ class _ChatScreenState extends State<ChatScreen> {
       if (end != -1) name = context.substring(start, end).trim();
     }
 
-    // 2. Load History
     final history = await PatientDataService.getChatHistory();
 
     if (mounted) {
       setState(() {
         _patientContextSummary = "Medical File Active: $name";
-        if (history.isNotEmpty) {
+        if (history.isNotEmpty && widget.initialQuery == null) {
           _messages = history;
         }
       });
-      // Scroll to bottom after loading
-      Future.delayed(const Duration(milliseconds: 100), _scrollToBottom);
     }
   }
 
@@ -82,13 +109,10 @@ class _ChatScreenState extends State<ChatScreen> {
     });
     _scrollToBottom();
 
-    // Save User Message
     await PatientDataService.saveChatMessage('user', input);
 
     try {
       final botResponse = await ApiService.sendToGemma(input);
-
-      // Save Bot Message
       await PatientDataService.saveChatMessage('bot', botResponse);
 
       if (mounted) {
@@ -105,26 +129,17 @@ class _ChatScreenState extends State<ChatScreen> {
         });
       }
     } finally {
-      if (mounted) {
-        setState(() {
-          _isLoading = false;
-        });
-      }
+      if (mounted) setState(() => _isLoading = false);
     }
   }
 
-  // Placeholder for Voice Logic
   void _toggleMic() {
-    setState(() {
-      _isListening = !_isListening;
-    });
-    // In a real app, integrate 'speech_to_text' package here
+    setState(() => _isListening = !_isListening);
     if (_isListening) {
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(
             content: Text("Listening... (Voice feature coming soon)")),
       );
-      // Simulate listening delay then stop
       Future.delayed(const Duration(seconds: 2), () {
         if (mounted) setState(() => _isListening = false);
       });
@@ -132,11 +147,20 @@ class _ChatScreenState extends State<ChatScreen> {
   }
 
   void _speakText(String text) {
-    // In a real app, integrate 'flutter_tts' package here
     ScaffoldMessenger.of(context).showSnackBar(
       const SnackBar(
           content: Text("Reading out loud... (TTS feature coming soon)")),
     );
+  }
+
+  // 🧹 Helper to Clean AI Markdown
+  String _cleanResponse(String text) {
+    return text
+        .replaceAll('**', '') // Remove bold markers
+        .replaceAll('##', '') // Remove header markers
+        .replaceAll(RegExp(r'^\* ', multiLine: true),
+            '• ') // Replace list asterisk with bullet
+        .trim();
   }
 
   @override
@@ -188,12 +212,6 @@ class _ChatScreenState extends State<ChatScreen> {
             )
           ],
         ),
-        actions: [
-          IconButton(
-            icon: const Icon(Icons.more_vert, color: AppColors.textDark),
-            onPressed: () {},
-          ),
-        ],
       ),
       body: Column(
         children: [
@@ -260,25 +278,6 @@ class _ChatScreenState extends State<ChatScreen> {
               ),
             ),
 
-          // Quick Suggestions
-          if (_messages.length <= 1)
-            SingleChildScrollView(
-              scrollDirection: Axis.horizontal,
-              padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
-              child: Row(
-                children: [
-                  _SuggestionChip("🤒 I have a fever",
-                      () => _sendMessage(text: "I have a fever")),
-                  _SuggestionChip("🤕 Headache",
-                      () => _sendMessage(text: "I have a severe headache")),
-                  _SuggestionChip("🤢 Stomach Pain",
-                      () => _sendMessage(text: "My stomach hurts")),
-                  _SuggestionChip("💊 Dosage Check",
-                      () => _sendMessage(text: "Check my medication dosage")),
-                ],
-              ),
-            ),
-
           // Input Area
           Container(
             padding: const EdgeInsets.all(16),
@@ -297,7 +296,8 @@ class _ChatScreenState extends State<ChatScreen> {
                   Expanded(
                     child: Container(
                       decoration: BoxDecoration(
-                        color: Colors.grey.shade100,
+                        // 🎨 INPUT BACKGROUND: Light Gray for visibility
+                        color: Colors.grey.shade200,
                         borderRadius: BorderRadius.circular(30),
                         border: Border.all(color: Colors.grey.shade300),
                       ),
@@ -306,9 +306,11 @@ class _ChatScreenState extends State<ChatScreen> {
                           Expanded(
                             child: TextField(
                               controller: _controller,
+                              // 🎨 TEXT COLOR: Black for contrast
+                              style: const TextStyle(
+                                  fontSize: 15, color: Colors.black87),
                               decoration: const InputDecoration(
-                                hintText:
-                                    'Type symptoms in English or Hausa...',
+                                hintText: 'Type symptoms here...',
                                 hintStyle:
                                     TextStyle(color: Colors.grey, fontSize: 14),
                                 border: InputBorder.none,
@@ -318,7 +320,6 @@ class _ChatScreenState extends State<ChatScreen> {
                               onSubmitted: (_) => _sendMessage(),
                             ),
                           ),
-                          // Mic Button inside input
                           GestureDetector(
                             onTap: _toggleMic,
                             child: Container(
@@ -344,7 +345,6 @@ class _ChatScreenState extends State<ChatScreen> {
                     ),
                   ),
                   const SizedBox(width: 12),
-                  // Send Button
                   GestureDetector(
                     onTap: () => _sendMessage(),
                     child: Container(
@@ -373,6 +373,9 @@ class _ChatScreenState extends State<ChatScreen> {
   }
 
   Widget _buildMessageBubble(String text, bool isUser) {
+    // Apply formatting only to bot messages
+    final String displayText = isUser ? text : _cleanResponse(text);
+
     return Padding(
       padding: const EdgeInsets.only(bottom: 16),
       child: Column(
@@ -421,7 +424,7 @@ class _ChatScreenState extends State<ChatScreen> {
                         : null,
                   ),
                   child: Text(
-                    text,
+                    displayText,
                     style: TextStyle(
                       color: isUser ? Colors.white : const Color(0xFF2D3748),
                       fontSize: 15,
@@ -432,62 +435,7 @@ class _ChatScreenState extends State<ChatScreen> {
               ),
             ],
           ),
-
-          // Action buttons for Bot messages
-          if (!isUser)
-            Padding(
-              padding: const EdgeInsets.only(left: 36, top: 4),
-              child: Row(
-                children: [
-                  GestureDetector(
-                    onTap: () => _speakText(text),
-                    child: Row(
-                      children: const [
-                        Icon(Icons.volume_up_rounded,
-                            size: 14, color: Colors.grey),
-                        SizedBox(width: 4),
-                        Text("Read Aloud",
-                            style: TextStyle(color: Colors.grey, fontSize: 10)),
-                      ],
-                    ),
-                  ),
-                  const SizedBox(width: 16),
-                  const Icon(Icons.thumb_up_alt_outlined,
-                      size: 14, color: Colors.grey),
-                ],
-              ),
-            ),
         ],
-      ),
-    );
-  }
-}
-
-class _SuggestionChip extends StatelessWidget {
-  final String label;
-  final VoidCallback onTap;
-
-  const _SuggestionChip(this.label, this.onTap);
-
-  @override
-  Widget build(BuildContext context) {
-    return GestureDetector(
-      onTap: onTap,
-      child: Container(
-        margin: const EdgeInsets.only(right: 8),
-        padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
-        decoration: BoxDecoration(
-          color: Colors.white,
-          borderRadius: BorderRadius.circular(20),
-          border: Border.all(color: AppColors.primary.withOpacity(0.2)),
-        ),
-        child: Text(
-          label,
-          style: const TextStyle(
-              color: AppColors.primary,
-              fontSize: 13,
-              fontWeight: FontWeight.w500),
-        ),
       ),
     );
   }

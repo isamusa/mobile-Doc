@@ -8,8 +8,7 @@ class PatientDataService {
   static const String _historyKey = 'medical_history';
   static const String _prescriptionsKey = 'active_prescriptions';
   static const String _labsKey = 'lab_results';
-  static const String _pendingTestsKey =
-      'pending_tests'; // New key for AI-suggested tests
+  static const String _pendingTestsKey = 'pending_tests';
   static const String _dietKey = 'diet_history';
   static const String _chatKey = 'chat_history';
 
@@ -86,12 +85,13 @@ class PatientDataService {
       """;
     }
 
-    // Add Active Prescriptions to Context
+    // Add Active Prescriptions
     List<String> prescriptions = prefs.getStringList(_prescriptionsKey) ?? [];
     if (prescriptions.isNotEmpty) {
       profileStr += "\nACTIVE MEDICATIONS:\n- ${prescriptions.join('\n- ')}";
     }
 
+    // Add Recent Diagnoses
     List<String> diagnosishistory = prefs.getStringList(_historyKey) ?? [];
     String recentDiagnoses = "";
     if (diagnosishistory.isNotEmpty) {
@@ -170,12 +170,10 @@ class PatientDataService {
     return prefs.getStringList(_labsKey) ?? [];
   }
 
-  // New Methods for AI Suggested Tests (For generating Slips)
+  // AI Suggested Tests
   static Future<void> addPendingTest(String testName) async {
     final prefs = await SharedPreferences.getInstance();
     List<String> tests = prefs.getStringList(_pendingTestsKey) ?? [];
-
-    // Avoid duplicates
     if (!tests.contains(testName)) {
       tests.add(testName);
       await prefs.setStringList(_pendingTestsKey, tests);
@@ -192,11 +190,6 @@ class PatientDataService {
     List<String> tests = prefs.getStringList(_pendingTestsKey) ?? [];
     tests.remove(testName);
     await prefs.setStringList(_pendingTestsKey, tests);
-  }
-
-  static Future<void> clearPendingTests() async {
-    final prefs = await SharedPreferences.getInstance();
-    await prefs.remove(_pendingTestsKey);
   }
 
   // --- 5. DIET HISTORY ---
@@ -220,7 +213,6 @@ class PatientDataService {
     final prefs = await SharedPreferences.getInstance();
     List<String> chats = prefs.getStringList(_chatKey) ?? [];
 
-    // Store as JSON string: {"sender": "user", "text": "Hi", "time": "..."}
     Map<String, String> msg = {
       "sender": sender,
       "text": text,
@@ -228,28 +220,11 @@ class PatientDataService {
     };
     chats.add(jsonEncode(msg));
     await prefs.setStringList(_chatKey, chats);
-
-    // Sync to Cloud
-    if (FirebaseAuth.instance.currentUser != null) {
-      try {
-        await FirebaseFirestore.instance
-            .collection('patients')
-            .doc(_userId)
-            .collection('chats')
-            .add({
-          ...msg,
-          'timestamp': FieldValue.serverTimestamp(),
-        });
-      } catch (e) {
-        print("⚠️ Cloud Chat Sync Failed: $e");
-      }
-    }
   }
 
   static Future<List<Map<String, String>>> getChatHistory() async {
     final prefs = await SharedPreferences.getInstance();
     List<String> rawChats = prefs.getStringList(_chatKey) ?? [];
-
     return rawChats.map((str) {
       Map<String, dynamic> json = jsonDecode(str);
       return {
@@ -258,8 +233,6 @@ class PatientDataService {
       };
     }).toList();
   }
-
-  // --- 7. UTILS ---
 
   static Future<void> restoreFromCloud() async {
     if (FirebaseAuth.instance.currentUser == null) return;

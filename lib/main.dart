@@ -69,7 +69,7 @@ class _MainScreenWrapperState extends State<MainScreenWrapper> {
         onDietTap: () => _onItemTapped(2),
       ),
       const ChatScreen(),
-      const DietScanScreen(),
+      const SmartScannerScreen(),
       const ProfileScreen(),
     ];
 

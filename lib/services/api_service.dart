@@ -1,9 +1,10 @@
 import 'dart:convert';
 import 'dart:io';
 import 'package:http/http.dart' as http;
-import 'patient_data_service.dart'; // Import the DB service
+import 'patient_data_service.dart';
 
 class ApiService {
+  // 🔴 ENSURE THIS MATCHES YOUR NGROK URL
   static const String _baseUrl =
       'https://choice-peacock-presently.ngrok-free.app';
 
@@ -12,15 +13,12 @@ class ApiService {
     'ngrok-skip-browser-warning': 'true',
   };
 
+  /// 🧠 CHAT: Sends Context + User Message to AI
   static Future<String> sendToGemma(String message) async {
     try {
-      // 1. Fetch Patient Context from DB
       String medicalContext = await PatientDataService.getContextString();
-
       print("🚀 Context Sent: $medicalContext");
 
-      // 2. Combine Context + User Message
-      // We wrap the user message so the AI sees the context first
       String fullPrompt =
           "[SYSTEM CONTEXT: $medicalContext] \n USER SAYS: $message";
 
@@ -36,7 +34,8 @@ class ApiService {
         final decoded = jsonDecode(response.body);
         String botReply = decoded['response'];
 
-        // 3. Smart Save: Diagnosis
+        // --- SMART DATA SAVING (Diagnosis, Tests, Meds) ---
+        // 1. Diagnosis
         if (botReply.contains("Diagnosis:") || botReply.contains("likely")) {
           String diagnosisSummary = botReply.split('\n').firstWhere(
               (line) => line.contains("Diagnosis") || line.contains("likely"),
@@ -44,27 +43,23 @@ class ApiService {
           await PatientDataService.addDiagnosis(diagnosisSummary);
         }
 
-        // 4. Auto-Detect Lab Tests (from Backend or Regex)
+        // 2. Lab Tests
         List<dynamic> tests = decoded['suggested_tests'] ?? [];
         if (tests.isNotEmpty) {
           for (var test in tests) {
             await PatientDataService.addPendingTest(test.toString());
           }
-        } else {
-          // Fallback Regex if backend didn't parse it
-          if (botReply.contains("**Tests:**") || botReply.contains("Test:")) {
-            // Basic keyword scan
-            if (botReply.contains("MP"))
-              await PatientDataService.addPendingTest("Malaria Parasite (MP)");
-            if (botReply.contains("Widal"))
-              await PatientDataService.addPendingTest("Widal Reaction Test");
-            if (botReply.contains("FBC"))
-              await PatientDataService.addPendingTest("Full Blood Count (FBC)");
-          }
+        } else if (botReply.contains("**Tests:**") ||
+            botReply.contains("Test:")) {
+          if (botReply.contains("MP"))
+            await PatientDataService.addPendingTest("Malaria Parasite (MP)");
+          if (botReply.contains("Widal"))
+            await PatientDataService.addPendingTest("Widal Reaction Test");
+          if (botReply.contains("FBC"))
+            await PatientDataService.addPendingTest("Full Blood Count (FBC)");
         }
 
-        // 5. Auto-Detect Prescriptions
-        // Look for lines starting with "1. [Drug]" under a Prescription header
+        // 3. Prescriptions
         if (botReply.contains("Prescription:") || botReply.contains("Plan:")) {
           final lines = botReply.split('\n');
           bool inPrescriptionBlock = false;
@@ -77,9 +72,8 @@ class ApiService {
               if (line.trim().isEmpty ||
                   line.contains("Tests:") ||
                   line.contains("Diagnosis:")) {
-                inPrescriptionBlock = false; // End of block
+                inPrescriptionBlock = false;
               } else if (RegExp(r'^\d+\.|-').hasMatch(line.trim())) {
-                // Found a list item like "1. Paracetamol"
                 await PatientDataService.addPrescription(
                     line.replaceAll(RegExp(r'^\d+\.|-'), '').trim(),
                     "As advised");
@@ -87,6 +81,7 @@ class ApiService {
             }
           }
         }
+        // --------------------------------------------------
 
         return botReply;
       }
@@ -96,7 +91,10 @@ class ApiService {
     }
   }
 
-  static Future<String> analyzeImage(File imageFile, String description) async {
+  /// 👁️ VISION: Analyze Image (Diet, Lab, General)
+  /// [mode] can be 'diet', 'lab', or 'general'
+  static Future<String> analyzeImage(File imageFile, String description,
+      {String mode = 'general'}) async {
     try {
       String medicalContext = await PatientDataService.getContextString();
 
@@ -107,8 +105,11 @@ class ApiService {
       request.files
           .add(await http.MultipartFile.fromPath('file', imageFile.path));
 
-      // Attach context to the description so AI knows who is eating
+      // 1. Send Description with Context
       request.fields['description'] = "$description. ($medicalContext)";
+
+      // 2. Send Mode (Crucial for Backend Prompt Selection)
+      request.fields['mode'] = mode;
 
       var response = await http.Response.fromStream(await request.send());
 
