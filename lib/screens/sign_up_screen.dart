@@ -14,6 +14,7 @@ class _ProfileSetupScreenState extends State<ProfileSetupScreen> {
   // Account Details
   final _nameCtrl = TextEditingController();
   final _phoneCtrl = TextEditingController();
+  final _emailCtrl = TextEditingController();
   final _passwordCtrl = TextEditingController();
 
   // Basic Medical
@@ -45,12 +46,12 @@ class _ProfileSetupScreenState extends State<ProfileSetupScreen> {
   bool _obscurePassword = true;
   bool _isSaving = false;
 
-  // Helper to fake email
-  String _emailFromPhone(String phone) => "$phone@mobiledoc.com";
+  // Require explicit email; do not derive from phone
 
   void _saveData() async {
     if (_nameCtrl.text.isEmpty ||
         _phoneCtrl.text.isEmpty ||
+        _emailCtrl.text.isEmpty ||
         _passwordCtrl.text.isEmpty) {
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(
@@ -63,10 +64,15 @@ class _ProfileSetupScreenState extends State<ProfileSetupScreen> {
 
     try {
       // 1. Create User in Firebase Auth
-      await FirebaseAuth.instance.createUserWithEmailAndPassword(
-        email: _emailFromPhone(_phoneCtrl.text.trim()),
+      final cred = await FirebaseAuth.instance.createUserWithEmailAndPassword(
+        email: _emailCtrl.text.trim(),
         password: _passwordCtrl.text,
       );
+
+      // Send verification email
+      try {
+        await cred.user?.sendEmailVerification();
+      } catch (_) {}
 
       // 2. Prepare Data Lists
       List<String> personalDiseases = _personalHistory.entries
@@ -96,10 +102,11 @@ class _ProfileSetupScreenState extends State<ProfileSetupScreen> {
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
           const SnackBar(
-              content: Text('Account Created! Welcome to Mobile Doc.')),
+              content: Text(
+                  'Account created. A verification email has been sent. Please verify before signing in.')),
         );
-        // Navigate to Main App directly after registration
-        Navigator.pushNamedAndRemoveUntil(context, '/main', (route) => false);
+        // After registration, navigate back to login so user can verify email
+        Navigator.pop(context);
       }
     } on FirebaseAuthException catch (e) {
       String msg = "Registration Failed";

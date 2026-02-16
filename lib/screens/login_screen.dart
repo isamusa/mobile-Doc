@@ -12,18 +12,17 @@ class LoginScreen extends StatefulWidget {
 }
 
 class _LoginScreenState extends State<LoginScreen> {
-  final _phoneController = TextEditingController();
+  final _emailController = TextEditingController();
   final _passwordController = TextEditingController();
   bool _isLoading = false;
   bool _obscurePassword = true;
 
-  // Helper to fake an email for auth since we use Phone UI
-  String _emailFromPhone(String phone) => "$phone@mobiledoc.com";
+  // No derived emails: require real email
 
   void _handleLogin() async {
-    if (_phoneController.text.isEmpty || _passwordController.text.isEmpty) {
+    if (_emailController.text.isEmpty || _passwordController.text.isEmpty) {
       ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Please enter phone and password')),
+        const SnackBar(content: Text('Please enter email and password')),
       );
       return;
     }
@@ -32,10 +31,22 @@ class _LoginScreenState extends State<LoginScreen> {
 
     try {
       // 1. Sign In with Firebase
-      await FirebaseAuth.instance.signInWithEmailAndPassword(
-        email: _emailFromPhone(_phoneController.text.trim()),
+      final cred = await FirebaseAuth.instance.signInWithEmailAndPassword(
+        email: _emailController.text.trim(),
         password: _passwordController.text,
       );
+
+      // Ensure email is verified
+      final user = cred.user;
+      if (user != null && !user.emailVerified) {
+        await FirebaseAuth.instance.signOut();
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
+              content: Text('Please verify your email before signing in.'),
+              backgroundColor: Colors.orange));
+        }
+        return;
+      }
 
       // 2. Restore Data from Cloud to Phone
       await PatientDataService.restoreFromCloud();
@@ -46,11 +57,11 @@ class _LoginScreenState extends State<LoginScreen> {
     } on FirebaseAuthException catch (e) {
       String message = "Login failed";
       if (e.code == 'user-not-found') {
-        message = "No user found for that phone number.";
+        message = "No user found for that email.";
       } else if (e.code == 'wrong-password') {
         message = "Wrong password provided.";
       } else if (e.code == 'invalid-email') {
-        message = "Invalid phone format.";
+        message = "Invalid email format.";
       }
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
@@ -124,11 +135,11 @@ class _LoginScreenState extends State<LoginScreen> {
 
                   // Inputs
                   TextField(
-                    controller: _phoneController,
-                    keyboardType: TextInputType.phone,
+                    controller: _emailController,
+                    keyboardType: TextInputType.emailAddress,
                     decoration: InputDecoration(
-                      labelText: "Phone Number",
-                      prefixIcon: const Icon(Icons.phone_android_outlined),
+                      labelText: "Email",
+                      prefixIcon: const Icon(Icons.email_outlined),
                       border: OutlineInputBorder(
                           borderRadius: BorderRadius.circular(12)),
                       contentPadding: const EdgeInsets.symmetric(
