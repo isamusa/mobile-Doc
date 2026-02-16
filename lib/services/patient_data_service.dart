@@ -11,10 +11,15 @@ class PatientDataService {
   static const String _labsKey = 'lab_results';
   static const String _pendingTestsKey = 'pending_tests';
   static const String _dietKey = 'diet_history';
-  static const String _chatKey = 'chat_history';
+  static const String _secureChatKey = 'patient_chat_history';
 
   // 🔐 Secure Storage Instance for PII
   static const _secureStorage = FlutterSecureStorage();
+
+  // Test hooks to avoid platform channels during widget tests
+  static Future<String> Function()? testGetContextString;
+  static Future<List<Map<String, String>>> Function()? testGetChatHistory;
+  static Future<void> Function(String, String)? testSaveChatMessage;
 
   static String get _userId {
     final user = FirebaseAuth.instance.currentUser;
@@ -37,25 +42,33 @@ class PatientDataService {
   }) async {
     final prefs = await SharedPreferences.getInstance();
 
-    // 🔐 1. Encrypt and store highly sensitive data separately
-    await _secureStorage.write(key: 'genotype_$_userId', value: genotype);
-    await _secureStorage.write(key: 'bloodGroup_$_userId', value: bloodGroup);
-
-    // 2. Store non-sensitive/clinical metadata in standard storage
-    final profile = {
+    // 🔐 1. Store full profile in secure storage (encrypted)
+    final fullProfile = {
       'name': name,
       'phoneNumber': phoneNumber,
       'age': age,
       'height': height,
       'weight': weight,
+      'genotype': genotype,
+      'bloodGroup': bloodGroup,
       'allergies': allergies,
       'personalHistory': personalHistory,
       'familyHistory': familyHistory,
-      // We keep placeholders or redacted versions for local metadata if needed
       'hasSensitiveData': true,
     };
 
-    await prefs.setString(_profileKey, jsonEncode(profile));
+    await _secureStorage.write(
+        key: 'patient_profile_$_userId', value: jsonEncode(fullProfile));
+
+    // 2. Store a redacted version in SharedPreferences for UI-only metadata
+    final redacted = {
+      'name': name,
+      'age': age,
+      'height': height,
+      'weight': weight,
+      'hasSensitiveData': true,
+    };
+    await prefs.setString(_profileKey, jsonEncode(redacted));
 
     if (FirebaseAuth.instance.currentUser != null) {
       try {
@@ -63,7 +76,7 @@ class PatientDataService {
         await FirebaseFirestore.instance
             .collection('patients')
             .doc(_userId)
-            .set(profile, SetOptions(merge: true));
+            .set(redacted, SetOptions(merge: true));
       } catch (e) {
         // Cloud backup error; continue
       }
@@ -71,17 +84,19 @@ class PatientDataService {
   }
 
   static Future<String> getContextString() async {
+    // Shortcut for tests
+    if (testGetContextString != null) return await testGetContextString!();
     final prefs = await SharedPreferences.getInstance();
 
     String profileStr = "Patient Profile: Unknown";
-    if (prefs.containsKey(_profileKey)) {
-      final p = jsonDecode(prefs.getString(_profileKey)!);
 
-      // 🔐 Retrieve sensitive data from Secure Storage
-      String? genotype =
-          await _secureStorage.read(key: 'genotype_$_userId') ?? "Unknown";
-      String? bloodGroup =
-          await _secureStorage.read(key: 'bloodGroup_$_userId') ?? "Unknown";
+    // Prefer full encrypted profile from secure storage
+    String? secured = await _secureStorage.read(
+      key: 'patient_profile_$_userId',
+    );
+
+    if (secured != null) {
+      final p = jsonDecode(secured);
 
       String historyStr = (p['personalHistory'] as List).isEmpty
           ? "None"
@@ -96,10 +111,21 @@ class PatientDataService {
       - Phone: ${p['phoneNumber']}
       - Age: ${p['age']}
       - Vitals: ${p['height']}cm, ${p['weight']}kg
-      - Genotype: $genotype | Blood Group: $bloodGroup
+      - Genotype: ${p['genotype'] ?? 'Unknown'} | Blood Group: ${p['bloodGroup'] ?? 'Unknown'}
       - Allergies: ${p['allergies']}
       - Existing Conditions: $historyStr
       - Family History: $familyStr
+      """;
+    } else if (prefs.containsKey(_profileKey)) {
+      // Fallback to redacted profile stored in SharedPreferences
+      final p = jsonDecode(prefs.getString(_profileKey)!);
+
+      profileStr = """
+      PATIENT SUMMARY:
+      - Name: ${p['name']}
+      - Age: ${p['age']}
+      - Vitals: ${p['height']}cm, ${p['weight']}kg
+      - Sensitive fields are stored securely
       """;
     }
 
@@ -227,26 +253,40 @@ class PatientDataService {
   // --- 6. CHAT HISTORY ---
 
   static Future<void> saveChatMessage(String sender, String text) async {
-    final prefs = await SharedPreferences.getInstance();
-    List<String> chats = prefs.getStringList(_chatKey) ?? [];
+    // Test hook bypass
+    if (testSaveChatMessage != null) {
+      return await testSaveChatMessage!(sender, text);
+    }
+    // Store chat messages encrypted per-user in secure storage
+    final key = '$_secureChatKey\$_userId';
+    String? raw = await _secureStorage.read(key: key);
+    List<dynamic> list =
+        raw != null && raw.isNotEmpty ? jsonDecode(raw) as List<dynamic> : [];
 
     Map<String, String> msg = {
       "sender": sender,
       "text": text,
       "time": DateTime.now().toIso8601String()
     };
-    chats.add(jsonEncode(msg));
-    await prefs.setStringList(_chatKey, chats);
+    list.add(msg);
+    await _secureStorage.write(key: key, value: jsonEncode(list));
   }
 
   static Future<List<Map<String, String>>> getChatHistory() async {
-    final prefs = await SharedPreferences.getInstance();
-    List<String> rawChats = prefs.getStringList(_chatKey) ?? [];
-    return rawChats.map((str) {
-      Map<String, dynamic> json = jsonDecode(str);
+    // Test hook bypass
+    if (testGetChatHistory != null) {
+      return await testGetChatHistory!();
+    }
+    final key = '$_secureChatKey\$_userId';
+    String? raw = await _secureStorage.read(key: key);
+    if (raw == null || raw.trim().isEmpty) return [];
+
+    final List<dynamic> decoded = jsonDecode(raw) as List<dynamic>;
+    return decoded.map<Map<String, String>>((e) {
+      final m = e as Map<String, dynamic>;
       return {
-        "sender": json['sender'].toString(),
-        "text": json['text'].toString(),
+        "sender": m['sender'].toString(),
+        "text": m['text'].toString(),
       };
     }).toList();
   }
@@ -269,7 +309,20 @@ class PatientDataService {
       if (doc.exists) {
         final data = doc.data()!;
         final prefs = await SharedPreferences.getInstance();
-        await prefs.setString(_profileKey, jsonEncode(data));
+
+        // Store redacted view in prefs and full profile in secure storage if provided
+        final redacted = {
+          'name': data['name'] ?? data['fullname'] ?? 'Unknown',
+          'age': data['age'] ?? 'Unknown',
+          'height': data['height'] ?? 'Unknown',
+          'weight': data['weight'] ?? 'Unknown',
+          'hasSensitiveData': true,
+        };
+        await prefs.setString(_profileKey, jsonEncode(redacted));
+
+        // If backend returns sensitive fields, store encrypted full profile
+        await _secureStorage.write(
+            key: 'patient_profile_$_userId', value: jsonEncode(data));
       }
       // Note: Restoring full chat history from Firestore might be heavy,
       // typically we rely on local cache or implement pagination.

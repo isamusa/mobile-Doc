@@ -91,17 +91,63 @@ class _ChatScreenState extends State<ChatScreen> {
     try {
       // Returns structured GemmaResponse object for validation
       final GemmaResponse response = await ApiService.sendToGemma(input);
-      await PatientDataService.saveChatMessage('bot', response.botReply);
 
-      if (mounted) {
-        setState(() {
-          _messages.add({
-            'sender': 'bot',
-            'text': response.botReply,
-            'metadata': response, // Metadata used for confirmation UI
+      // Detect clarification responses (validator asked for more info)
+      final bool isClarification = response.suggestedDiagnosis == null &&
+          response.suggestedPrescriptions.isEmpty &&
+          response.suggestedTests.isEmpty &&
+          response.botReply.toLowerCase().contains('need more information');
+
+      if (isClarification) {
+        // Save the bot clarification as a regular message but without clinical metadata
+        await PatientDataService.saveChatMessage('bot', response.botReply);
+        if (mounted) {
+          setState(() {
+            _messages.add(
+                {'sender': 'bot', 'text': response.botReply, 'metadata': null});
           });
-        });
-        _scrollToBottom();
+          _scrollToBottom();
+          // Prompt the user for more details in a focused dialog
+          showDialog(
+            context: context,
+            builder: (ctx) => AlertDialog(
+              title: const Text('More details needed'),
+              content: Text(response.botReply),
+              actions: [
+                TextButton(
+                  onPressed: () {
+                    Navigator.pop(ctx);
+                  },
+                  child: const Text('Dismiss'),
+                ),
+                ElevatedButton(
+                  style: ElevatedButton.styleFrom(
+                      backgroundColor: AppColors.primary),
+                  onPressed: () {
+                    Navigator.pop(ctx);
+                    // Focus the input field so the user can provide more detail
+                    FocusScope.of(context).requestFocus(FocusNode());
+                    // Optionally, encourage more detail by setting hint text
+                  },
+                  child: const Text('Provide Details'),
+                ),
+              ],
+            ),
+          );
+        }
+      } else {
+        await PatientDataService.saveChatMessage('bot', response.botReply);
+
+        if (mounted) {
+          setState(() {
+            _messages.add({
+              'sender': 'bot',
+              'text': response.botReply,
+              'metadata': response, // Metadata used for confirmation UI
+            });
+          });
+          _scrollToBottom();
+        }
       }
     } catch (e) {
       if (mounted) {

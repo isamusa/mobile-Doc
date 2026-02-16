@@ -1,6 +1,7 @@
 import 'dart:convert';
 import 'dart:io';
 import 'package:http/http.dart' as http;
+import '../config/environment.dart';
 import 'patient_data_service.dart';
 
 /// Structured response to handle Clinical Safety validation in the UI
@@ -19,13 +20,92 @@ class GemmaResponse {
 }
 
 class ApiService {
-  // 🔴 ENSURE THIS MATCHES YOUR NGROK URL
-  static String _baseUrl = 'https://choice-peacock-presently.ngrok-free.app';
-  static String get baseUrl => _baseUrl;
+  // Use environment-backed API URL (set with --dart-define=API_URL=...)
+  static String? _overrideBaseUrl;
+
+  // Test hook: override network call in widget/unit tests
+  static Future<GemmaResponse> Function(String)? testSendToGemma;
 
   static void updateBaseUrl(String newUrl) {
-    _baseUrl = newUrl;
+    _overrideBaseUrl = newUrl;
   }
+
+  // Basic heuristics to detect low-confidence, injected, or unsafe responses.
+  // Returns true if the response looks medically meaningful and safe to present.
+  static bool _isValidMedicalResponse(
+      String botReply, Map<String, dynamic>? decoded) {
+    if (botReply.trim().isEmpty) return false;
+
+    final lower = botReply.toLowerCase();
+
+    // Reject obvious non-answers or low-confidence phrases
+    final lowConfidencePhrases = [
+      "i'm not sure",
+      "i do not know",
+      "i cannot",
+      "cannot determine",
+      "no information",
+      "unable to",
+    ];
+    for (var p in lowConfidencePhrases) {
+      if (lower.contains(p)) return false;
+    }
+
+    // Reject possible prompt-injection tokens
+    final injectionTokens = [
+      "] ignore previous",
+      "ignore previous",
+      "ignore all previous",
+      "malicious",
+      "recommend only"
+    ];
+    for (var t in injectionTokens) {
+      if (lower.contains(t)) return false;
+    }
+
+    // Basic length check
+    if (botReply.length < 30) return false;
+
+    // If the backend provides structured fields, prefer those as signal of quality
+    if (decoded != null) {
+      if ((decoded['response'] ?? '').toString().trim().isEmpty) return false;
+      // If server gives an explicit 'confidence' score and it's low, reject
+      if (decoded.containsKey('confidence')) {
+        try {
+          final c = double.tryParse(decoded['confidence'].toString()) ?? 1.0;
+          if (c < 0.4) return false;
+        } catch (_) {}
+      }
+    }
+
+    // Require medical keywords (diagnosis/tests/prescription) to consider it a clinical reply
+    final medicalKeywords = [
+      'diagnosis',
+      'prescription',
+      'tests',
+      'lab',
+      'malaria',
+      'symptom',
+      'treatment',
+      'recommend'
+    ];
+    var found = 0;
+    for (var k in medicalKeywords) {
+      if (lower.contains(k)) found++;
+    }
+    if (found == 0) return false;
+
+    return true;
+  }
+
+  // Public wrapper for tests and external checks
+  static bool isValidMedicalResponse(String botReply,
+      [Map<String, dynamic>? decoded]) {
+    return _isValidMedicalResponse(botReply, decoded);
+  }
+
+  static String get _baseUrl => _overrideBaseUrl ?? Environment.apiUrl;
+  static String get baseUrl => _baseUrl;
 
   static const Map<String, String> _headers = {
     'Content-Type': 'application/json',
@@ -35,6 +115,8 @@ class ApiService {
   /// 🧠 CHAT: Sends Context + User Message to AI
   /// UPDATED: Now returns a GemmaResponse object for Human-in-the-loop validation
   static Future<GemmaResponse> sendToGemma(String message) async {
+    // Test override for faster, deterministic widget testing
+    if (testSendToGemma != null) return await testSendToGemma!(message);
     try {
       String medicalContext = await PatientDataService.getContextString();
       String fullPrompt =
@@ -51,6 +133,18 @@ class ApiService {
       if (response.statusCode == 200) {
         final decoded = jsonDecode(response.body);
         String botReply = decoded['response'];
+
+        // Validate AI response before returning structured data
+        if (!_isValidMedicalResponse(botReply, decoded)) {
+          // Return a clarification prompt instead of unsafe data
+          return GemmaResponse(
+            botReply:
+                'I need more information to assist safely. Can you provide more details about symptoms, duration, and any recent medications?',
+            suggestedDiagnosis: null,
+            suggestedTests: const [],
+            suggestedPrescriptions: const [],
+          );
+        }
 
         // --- DRAFT DATA PARSING (For UI Confirmation) ---
         String? diagnosis;
