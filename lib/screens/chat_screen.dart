@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
-import 'package:flutter_markdown/flutter_markdown.dart'; //
+import 'package:flutter_markdown/flutter_markdown.dart';
+import 'package:speech_to_text/speech_to_text.dart' as stt;
 import '../theme/app_theme.dart';
 import '../services/api_service.dart';
 import '../services/patient_data_service.dart';
@@ -15,6 +16,8 @@ class ChatScreen extends StatefulWidget {
 class _ChatScreenState extends State<ChatScreen> {
   final TextEditingController _controller = TextEditingController();
   final ScrollController _scrollController = ScrollController();
+  late stt.SpeechToText _speechToText;
+  bool _isListening = false;
 
   // Updated message structure to include metadata for Human-in-the-loop validation
   List<Map<String, dynamic>> _messages = [
@@ -32,6 +35,8 @@ class _ChatScreenState extends State<ChatScreen> {
   @override
   void initState() {
     super.initState();
+    _speechToText = stt.SpeechToText();
+    _initializeSpeechToText();
     _loadData();
 
     if (widget.initialQuery != null) {
@@ -39,6 +44,79 @@ class _ChatScreenState extends State<ChatScreen> {
         _sendMessage(text: widget.initialQuery);
       });
     }
+  }
+
+  Future<void> _initializeSpeechToText() async {
+    try {
+      bool available = await _speechToText.initialize(
+        onError: (error) {
+          if (mounted) {
+            ScaffoldMessenger.of(context).showSnackBar(
+              SnackBar(content: Text('Speech error: ${error.errorMsg}')),
+            );
+          }
+        },
+        onStatus: (status) {
+          // Handle status changes silently
+        },
+      );
+      if (!available && mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+              content: Text('Speech recognition not available on this device')),
+        );
+      }
+    } catch (e) {
+      // Speech to text not available, continue without voice
+    }
+  }
+
+  Future<void> _toggleMic() async {
+    if (!_speechToText.isAvailable) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+              content: Text('Speech recognition not available'),
+              backgroundColor: Colors.orange),
+        );
+      }
+      return;
+    }
+
+    if (!_isListening) {
+      try {
+        bool available = await _speechToText.initialize();
+        if (available) {
+          setState(() => _isListening = true);
+          _speechToText.listen(
+            onResult: (result) {
+              setState(() {
+                _controller.text = result.recognizedWords;
+              });
+            },
+            listenFor: const Duration(seconds: 30),
+            pauseFor: const Duration(seconds: 3),
+          );
+        }
+      } catch (e) {
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(content: Text('Error starting speech: $e')),
+          );
+        }
+      }
+    } else {
+      _speechToText.stop();
+      setState(() => _isListening = false);
+    }
+  }
+
+  @override
+  void dispose() {
+    _speechToText.cancel();
+    _controller.dispose();
+    _scrollController.dispose();
+    super.dispose();
   }
 
   Future<void> _loadData() async {
@@ -425,6 +503,14 @@ class _ChatScreenState extends State<ChatScreen> {
                   onSubmitted: (_) => _sendMessage(),
                 ),
               ),
+            ),
+            const SizedBox(width: 12),
+            FloatingActionButton(
+              onPressed: _toggleMic,
+              backgroundColor: _isListening ? Colors.red : Colors.grey,
+              mini: true,
+              child: Icon(_isListening ? Icons.stop : Icons.mic,
+                  color: Colors.white),
             ),
             const SizedBox(width: 12),
             FloatingActionButton(
