@@ -104,6 +104,30 @@ class ApiService {
     return _isValidMedicalResponse(botReply, decoded);
   }
 
+  // Sanitize user input to prevent prompt injection attacks
+  // Escapes/replaces tokens that could manipulate model behavior
+  static String _sanitizeUserMessage(String message) {
+    String sanitized = message;
+
+    // Replace prompt injection attempts
+    final injectionPatterns = {
+      RegExp(r'\]\s*ignore', caseSensitive: false): '] note:',
+      RegExp(r'ignore\s+previous', caseSensitive: false): 'recall previous',
+      RegExp(r'\[\s*SYSTEM', caseSensitive: false): '[PATIENT',
+      RegExp(r'\[\s*system', caseSensitive: false): '[patient',
+    };
+
+    injectionPatterns.forEach((pattern, replacement) {
+      sanitized = sanitized.replaceAll(pattern, replacement);
+    });
+
+    // Escape dangerous bracket sequences
+    sanitized = sanitized.replaceAll(']', '] ');
+    sanitized = sanitized.replaceAll('[', ' [');
+
+    return sanitized;
+  }
+
   static String get _baseUrl => _overrideBaseUrl ?? Environment.apiUrl;
   static String get baseUrl => _baseUrl;
 
@@ -119,8 +143,9 @@ class ApiService {
     if (testSendToGemma != null) return await testSendToGemma!(message);
     try {
       String medicalContext = await PatientDataService.getContextString();
+      String sanitizedMessage = _sanitizeUserMessage(message);
       String fullPrompt =
-          "[SYSTEM CONTEXT: $medicalContext] \n USER SAYS: $message";
+          "[SYSTEM CONTEXT: $medicalContext] \n USER SAYS: $sanitizedMessage";
 
       final response = await http
           .post(
