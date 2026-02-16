@@ -1,7 +1,7 @@
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
-import 'package:flutter_secure_storage/flutter_secure_storage.dart'; // 🔐 New import
+import 'secure_storage_helper.dart';
 import 'dart:convert';
 
 class PatientDataService {
@@ -13,8 +13,7 @@ class PatientDataService {
   static const String _dietKey = 'diet_history';
   static const String _secureChatKey = 'patient_chat_history';
 
-  // 🔐 Secure Storage Instance for PII
-  static const _secureStorage = FlutterSecureStorage();
+  // Secure storage access is centralized in SecureStorageHelper
 
   // Test hooks to avoid platform channels during widget tests
   static Future<String> Function()? testGetContextString;
@@ -57,8 +56,8 @@ class PatientDataService {
       'hasSensitiveData': true,
     };
 
-    await _secureStorage.write(
-        key: 'patient_profile_$_userId', value: jsonEncode(fullProfile));
+    await SecureStorageHelper.write(
+        'patient_profile_$_userId', jsonEncode(fullProfile));
 
     // 2. Store a redacted version in SharedPreferences for UI-only metadata
     final redacted = {
@@ -91,9 +90,8 @@ class PatientDataService {
     String profileStr = "Patient Profile: Unknown";
 
     // Prefer full encrypted profile from secure storage
-    String? secured = await _secureStorage.read(
-      key: 'patient_profile_$_userId',
-    );
+    String? secured =
+        await SecureStorageHelper.read('patient_profile_$_userId');
 
     if (secured != null) {
       final p = jsonDecode(secured);
@@ -257,9 +255,12 @@ class PatientDataService {
     if (testSaveChatMessage != null) {
       return await testSaveChatMessage!(sender, text);
     }
+
+    // Migrate any legacy SharedPreferences chat history to secure storage
+    await _migrateChatHistoryIfNeeded();
     // Store chat messages encrypted per-user in secure storage
     final key = '$_secureChatKey\$_userId';
-    String? raw = await _secureStorage.read(key: key);
+    String? raw = await SecureStorageHelper.read(key);
     List<dynamic> list =
         raw != null && raw.isNotEmpty ? jsonDecode(raw) as List<dynamic> : [];
 
@@ -269,7 +270,7 @@ class PatientDataService {
       "time": DateTime.now().toIso8601String()
     };
     list.add(msg);
-    await _secureStorage.write(key: key, value: jsonEncode(list));
+    await SecureStorageHelper.write(key, jsonEncode(list));
   }
 
   static Future<List<Map<String, String>>> getChatHistory() async {
@@ -278,7 +279,7 @@ class PatientDataService {
       return await testGetChatHistory!();
     }
     final key = '$_secureChatKey\$_userId';
-    String? raw = await _secureStorage.read(key: key);
+    String? raw = await SecureStorageHelper.read(key);
     if (raw == null || raw.trim().isEmpty) return [];
 
     final List<dynamic> decoded = jsonDecode(raw) as List<dynamic>;
@@ -291,11 +292,49 @@ class PatientDataService {
     }).toList();
   }
 
+  // Migration helper: move legacy SharedPreferences chat to secure storage
+  static Future<void> _migrateChatHistoryIfNeeded() async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      const legacyKey = 'chat_history';
+      if (!prefs.containsKey(legacyKey)) return;
+
+      final List<String> legacy = prefs.getStringList(legacyKey) ?? [];
+      if (legacy.isEmpty) {
+        await prefs.remove(legacyKey);
+        return;
+      }
+
+      final key = '$_secureChatKey\$_userId';
+      String? raw = await SecureStorageHelper.read(key);
+      List<dynamic> current =
+          raw != null && raw.isNotEmpty ? jsonDecode(raw) as List<dynamic> : [];
+
+      for (var item in legacy) {
+        try {
+          final Map<String, dynamic> json = jsonDecode(item);
+          current.add({
+            'sender': json['sender'].toString(),
+            'text': json['text'].toString(),
+            'time': json['time'].toString(),
+          });
+        } catch (_) {
+          // If a legacy entry is malformed, skip it
+        }
+      }
+
+      await SecureStorageHelper.write(key, jsonEncode(current));
+      await prefs.remove(legacyKey);
+    } catch (_) {
+      // Non-fatal migration error; continue without blocking chat
+    }
+  }
+
   // UPDATED: Wipe Secure Storage on clear
   static Future<void> clearLocalData() async {
     final prefs = await SharedPreferences.getInstance();
     await prefs.clear();
-    await _secureStorage.deleteAll(); // 🔐 Clear encrypted PII
+    await SecureStorageHelper.deleteAll(); // 🔐 Clear encrypted PII
   }
 
   static Future<void> restoreFromCloud() async {
@@ -321,8 +360,8 @@ class PatientDataService {
         await prefs.setString(_profileKey, jsonEncode(redacted));
 
         // If backend returns sensitive fields, store encrypted full profile
-        await _secureStorage.write(
-            key: 'patient_profile_$_userId', value: jsonEncode(data));
+        await SecureStorageHelper.write(
+            'patient_profile_$_userId', jsonEncode(data));
       }
       // Note: Restoring full chat history from Firestore might be heavy,
       // typically we rely on local cache or implement pagination.
