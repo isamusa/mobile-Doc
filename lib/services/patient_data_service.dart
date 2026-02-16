@@ -1,6 +1,7 @@
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
+import 'package:flutter_secure_storage/flutter_secure_storage.dart'; // 🔐 New import
 import 'dart:convert';
 
 class PatientDataService {
@@ -11,6 +12,9 @@ class PatientDataService {
   static const String _pendingTestsKey = 'pending_tests';
   static const String _dietKey = 'diet_history';
   static const String _chatKey = 'chat_history';
+
+  // 🔐 Secure Storage Instance for PII
+  static const _secureStorage = FlutterSecureStorage();
 
   static String get _userId {
     final user = FirebaseAuth.instance.currentUser;
@@ -32,28 +36,36 @@ class PatientDataService {
     required List<String> familyHistory,
   }) async {
     final prefs = await SharedPreferences.getInstance();
+
+    // 🔐 1. Encrypt and store highly sensitive data separately
+    await _secureStorage.write(key: 'genotype_$_userId', value: genotype);
+    await _secureStorage.write(key: 'bloodGroup_$_userId', value: bloodGroup);
+
+    // 2. Store non-sensitive/clinical metadata in standard storage
     final profile = {
       'name': name,
       'phoneNumber': phoneNumber,
       'age': age,
       'height': height,
       'weight': weight,
-      'genotype': genotype,
-      'bloodGroup': bloodGroup,
       'allergies': allergies,
       'personalHistory': personalHistory,
       'familyHistory': familyHistory,
+      // We keep placeholders or redacted versions for local metadata if needed
+      'hasSensitiveData': true,
     };
+
     await prefs.setString(_profileKey, jsonEncode(profile));
 
     if (FirebaseAuth.instance.currentUser != null) {
       try {
+        // Only backup non-sensitive or properly authorized data to Cloud
         await FirebaseFirestore.instance
             .collection('patients')
             .doc(_userId)
             .set(profile, SetOptions(merge: true));
       } catch (e) {
-        print("⚠️ Cloud Backup Failed: $e");
+        // Cloud backup error; continue
       }
     }
   }
@@ -64,6 +76,12 @@ class PatientDataService {
     String profileStr = "Patient Profile: Unknown";
     if (prefs.containsKey(_profileKey)) {
       final p = jsonDecode(prefs.getString(_profileKey)!);
+
+      // 🔐 Retrieve sensitive data from Secure Storage
+      String? genotype =
+          await _secureStorage.read(key: 'genotype_$_userId') ?? "Unknown";
+      String? bloodGroup =
+          await _secureStorage.read(key: 'bloodGroup_$_userId') ?? "Unknown";
 
       String historyStr = (p['personalHistory'] as List).isEmpty
           ? "None"
@@ -78,7 +96,7 @@ class PatientDataService {
       - Phone: ${p['phoneNumber']}
       - Age: ${p['age']}
       - Vitals: ${p['height']}cm, ${p['weight']}kg
-      - Genotype: ${p['genotype']} | Blood Group: ${p['bloodGroup']}
+      - Genotype: $genotype | Blood Group: $bloodGroup
       - Allergies: ${p['allergies']}
       - Existing Conditions: $historyStr
       - Family History: $familyStr
@@ -122,7 +140,7 @@ class PatientDataService {
           'timestamp': FieldValue.serverTimestamp(),
         });
       } catch (e) {
-        print("⚠️ Cloud Sync Failed: $e");
+        // Cloud sync error; continue
       }
     }
   }
@@ -206,7 +224,6 @@ class PatientDataService {
     final prefs = await SharedPreferences.getInstance();
     return prefs.getStringList(_dietKey) ?? [];
   }
-
   // --- 6. CHAT HISTORY ---
 
   static Future<void> saveChatMessage(String sender, String text) async {
@@ -234,6 +251,13 @@ class PatientDataService {
     }).toList();
   }
 
+  // UPDATED: Wipe Secure Storage on clear
+  static Future<void> clearLocalData() async {
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.clear();
+    await _secureStorage.deleteAll(); // 🔐 Clear encrypted PII
+  }
+
   static Future<void> restoreFromCloud() async {
     if (FirebaseAuth.instance.currentUser == null) return;
 
@@ -246,17 +270,11 @@ class PatientDataService {
         final data = doc.data()!;
         final prefs = await SharedPreferences.getInstance();
         await prefs.setString(_profileKey, jsonEncode(data));
-        print("✅ Restored Profile from Cloud");
       }
       // Note: Restoring full chat history from Firestore might be heavy,
       // typically we rely on local cache or implement pagination.
     } catch (e) {
-      print("❌ Restore Failed: $e");
+      // Restore error; continue
     }
-  }
-
-  static Future<void> clearLocalData() async {
-    final prefs = await SharedPreferences.getInstance();
-    await prefs.clear();
   }
 }

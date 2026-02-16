@@ -14,11 +14,10 @@ class AppTheme {
   static ThemeData get lightTheme {
     final base = ThemeData.light();
     return base.copyWith(
-      useMaterial3: true,
       colorScheme: base.colorScheme.copyWith(
         primary: AppColors.primary,
         secondary: AppColors.primary,
-        background: AppColors.background,
+        surface: AppColors.background,
       ),
       primaryColor: AppColors.primary,
       scaffoldBackgroundColor: AppColors.background,

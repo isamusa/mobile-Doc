@@ -5,6 +5,7 @@ import 'package:pdf/widgets.dart' as pw;
 import 'package:printing/printing.dart';
 import '../theme/app_theme.dart';
 import '../services/patient_data_service.dart';
+import '../services/api_service.dart'; // 🔴 Required to update baseUrl
 
 class ProfileScreen extends StatefulWidget {
   const ProfileScreen({super.key});
@@ -38,6 +39,54 @@ class _ProfileScreenState extends State<ProfileScreen>
   void dispose() {
     _tabController.dispose();
     super.dispose();
+  }
+
+  // 🛠️ Developer Tool: Show URL Update Dialog
+  void _showDevUrlDialog() {
+    final TextEditingController urlController =
+        TextEditingController(text: ApiService.baseUrl);
+
+    showDialog(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: const Text("Developer Tools",
+            style: TextStyle(fontWeight: FontWeight.bold)),
+        content: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            const Text("Update Backend URL (Ngrok/Kaggle)",
+                style: TextStyle(fontSize: 12)),
+            const SizedBox(height: 10),
+            TextField(
+              controller: urlController,
+              decoration: InputDecoration(
+                hintText: "https://your-url.ngrok.app",
+                border:
+                    OutlineInputBorder(borderRadius: BorderRadius.circular(8)),
+                contentPadding: const EdgeInsets.symmetric(horizontal: 12),
+              ),
+              style: const TextStyle(fontSize: 14),
+            ),
+          ],
+        ),
+        actions: [
+          TextButton(
+              onPressed: () => Navigator.pop(context),
+              child: const Text("Cancel")),
+          ElevatedButton(
+            onPressed: () {
+              // Note: You will need to add a static setter or make _baseUrl non-final in ApiService
+              ApiService.updateBaseUrl(urlController.text.trim());
+              Navigator.pop(context);
+              ScaffoldMessenger.of(context).showSnackBar(
+                  const SnackBar(content: Text("Backend URL Updated")));
+            },
+            child: const Text("Save URL"),
+          ),
+        ],
+      ),
+    );
   }
 
   Future<void> _loadPatientData() async {
@@ -181,11 +230,15 @@ class _ProfileScreenState extends State<ProfileScreen>
                   color: Colors.grey.shade50,
                   child: Row(
                     children: [
-                      const CircleAvatar(
-                        radius: 30,
-                        backgroundColor: AppColors.secondary,
-                        child: Icon(Icons.person,
-                            size: 30, color: AppColors.primary),
+                      // 💡 Long Press here to trigger Developer URL Dialog
+                      GestureDetector(
+                        onLongPress: _showDevUrlDialog,
+                        child: const CircleAvatar(
+                          radius: 30,
+                          backgroundColor: AppColors.secondary,
+                          child: Icon(Icons.person,
+                              size: 30, color: AppColors.primary),
+                        ),
                       ),
                       const SizedBox(width: 16),
                       Column(
@@ -291,7 +344,6 @@ class _ProfileScreenState extends State<ProfileScreen>
             trailing: IconButton(
               icon: const Icon(Icons.check_circle_outline, color: Colors.green),
               onPressed: () {
-                // Mark as taken or remove
                 PatientDataService.removePrescription(index)
                     .then((_) => _loadPatientData());
               },

@@ -1,23 +1,20 @@
 import 'package:flutter/material.dart';
 import 'package:firebase_core/firebase_core.dart';
-import 'package:firebase_auth/firebase_auth.dart'; // 🔴 Import
+import 'package:firebase_auth/firebase_auth.dart';
 import 'theme/app_theme.dart';
 import 'screens/login_screen.dart';
 import 'screens/home_screen.dart';
 import 'screens/chat_screen.dart';
 import 'screens/diet_scan_screen.dart';
 import 'screens/profile_screen.dart';
-import 'screens/medical_screen.dart';
-import 'services/patient_data_service.dart';
 
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
 
   try {
     await Firebase.initializeApp();
-    print("✅ Firebase Initialized");
   } catch (e) {
-    print("⚠️ Firebase Error: $e");
+    // Firebase initialization error; continue anyway
   }
 
   runApp(const MobileDocApp());
@@ -82,7 +79,7 @@ class _MainScreenWrapperState extends State<MainScreenWrapper> {
         selectedIndex: _selectedIndex,
         onDestinationSelected: _onItemTapped,
         backgroundColor: Colors.white,
-        indicatorColor: AppColors.primary.withOpacity(0.2),
+        indicatorColor: AppColors.primary.withValues(alpha: 0.2),
         destinations: const [
           NavigationDestination(
             icon: Icon(Icons.home_outlined),

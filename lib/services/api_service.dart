@@ -3,10 +3,29 @@ import 'dart:io';
 import 'package:http/http.dart' as http;
 import 'patient_data_service.dart';
 
+/// Structured response to handle Clinical Safety validation in the UI
+class GemmaResponse {
+  final String botReply;
+  final String? suggestedDiagnosis;
+  final List<String> suggestedTests;
+  final List<String> suggestedPrescriptions;
+
+  GemmaResponse({
+    required this.botReply,
+    this.suggestedDiagnosis,
+    this.suggestedTests = const [],
+    this.suggestedPrescriptions = const [],
+  });
+}
+
 class ApiService {
   // 🔴 ENSURE THIS MATCHES YOUR NGROK URL
-  static const String _baseUrl =
-      'https://choice-peacock-presently.ngrok-free.app';
+  static String _baseUrl = 'https://choice-peacock-presently.ngrok-free.app';
+  static String get baseUrl => _baseUrl;
+
+  static void updateBaseUrl(String newUrl) {
+    _baseUrl = newUrl;
+  }
 
   static const Map<String, String> _headers = {
     'Content-Type': 'application/json',
@@ -14,11 +33,10 @@ class ApiService {
   };
 
   /// 🧠 CHAT: Sends Context + User Message to AI
-  static Future<String> sendToGemma(String message) async {
+  /// UPDATED: Now returns a GemmaResponse object for Human-in-the-loop validation
+  static Future<GemmaResponse> sendToGemma(String message) async {
     try {
       String medicalContext = await PatientDataService.getContextString();
-      print("🚀 Context Sent: $medicalContext");
-
       String fullPrompt =
           "[SYSTEM CONTEXT: $medicalContext] \n USER SAYS: $message";
 
@@ -28,71 +46,71 @@ class ApiService {
             headers: _headers,
             body: jsonEncode({'user_text': fullPrompt}),
           )
-          .timeout(const Duration(seconds: 45));
+          .timeout(const Duration(seconds: 45)); // Handling Kaggle cold starts
 
       if (response.statusCode == 200) {
         final decoded = jsonDecode(response.body);
         String botReply = decoded['response'];
 
-        // --- SMART DATA SAVING (Diagnosis, Tests, Meds) ---
-        // 1. Diagnosis
+        // --- DRAFT DATA PARSING (For UI Confirmation) ---
+        String? diagnosis;
+        List<String> tests = [];
+        List<String> prescriptions = [];
+
+        // 1. Extract Diagnosis Draft
         if (botReply.contains("Diagnosis:") || botReply.contains("likely")) {
-          String diagnosisSummary = botReply.split('\n').firstWhere(
+          diagnosis = botReply.split('\n').firstWhere(
               (line) => line.contains("Diagnosis") || line.contains("likely"),
               orElse: () => "Consultation");
-          await PatientDataService.addDiagnosis(diagnosisSummary);
         }
 
-        // 2. Lab Tests
-        List<dynamic> tests = decoded['suggested_tests'] ?? [];
-        if (tests.isNotEmpty) {
-          for (var test in tests) {
-            await PatientDataService.addPendingTest(test.toString());
-          }
+        // 2. Extract Lab Test Drafts
+        List<dynamic> serverTests = decoded['suggested_tests'] ?? [];
+        if (serverTests.isNotEmpty) {
+          tests.addAll(serverTests.map((e) => e.toString()));
         } else if (botReply.contains("**Tests:**") ||
             botReply.contains("Test:")) {
-          if (botReply.contains("MP"))
-            await PatientDataService.addPendingTest("Malaria Parasite (MP)");
-          if (botReply.contains("Widal"))
-            await PatientDataService.addPendingTest("Widal Reaction Test");
-          if (botReply.contains("FBC"))
-            await PatientDataService.addPendingTest("Full Blood Count (FBC)");
+          if (botReply.contains("MP")) tests.add("Malaria Parasite (MP)");
+          if (botReply.contains("Widal")) tests.add("Widal Reaction Test");
+          if (botReply.contains("FBC")) tests.add("Full Blood Count (FBC)");
         }
 
-        // 3. Prescriptions
+        // 3. Extract Prescription Drafts
         if (botReply.contains("Prescription:") || botReply.contains("Plan:")) {
           final lines = botReply.split('\n');
-          bool inPrescriptionBlock = false;
+          bool inBlock = false;
           for (var line in lines) {
             if (line.contains("Prescription:") || line.contains("Plan:")) {
-              inPrescriptionBlock = true;
+              inBlock = true;
               continue;
             }
-            if (inPrescriptionBlock) {
+            if (inBlock) {
               if (line.trim().isEmpty ||
                   line.contains("Tests:") ||
                   line.contains("Diagnosis:")) {
-                inPrescriptionBlock = false;
+                inBlock = false;
               } else if (RegExp(r'^\d+\.|-').hasMatch(line.trim())) {
-                await PatientDataService.addPrescription(
-                    line.replaceAll(RegExp(r'^\d+\.|-'), '').trim(),
-                    "As advised");
+                prescriptions
+                    .add(line.replaceAll(RegExp(r'^\d+\.|-'), '').trim());
               }
             }
           }
         }
-        // --------------------------------------------------
 
-        return botReply;
+        return GemmaResponse(
+          botReply: botReply,
+          suggestedDiagnosis: diagnosis,
+          suggestedTests: tests,
+          suggestedPrescriptions: prescriptions,
+        );
       }
-      return 'Server Error: ${response.statusCode}';
+      throw Exception('Server Error: ${response.statusCode}');
     } catch (e) {
-      return 'Connection Failed. Is Dr. Gemma online?';
+      return GemmaResponse(botReply: 'Connection Failed. Is Dr. Gemma online?');
     }
   }
 
   /// 👁️ VISION: Analyze Image (Diet, Lab, General)
-  /// [mode] can be 'diet', 'lab', or 'general'
   static Future<String> analyzeImage(File imageFile, String description,
       {String mode = 'general'}) async {
     try {
@@ -101,14 +119,10 @@ class ApiService {
       var request =
           http.MultipartRequest('POST', Uri.parse('$_baseUrl/analyze_image'));
       request.headers.addAll(_headers);
-
       request.files
           .add(await http.MultipartFile.fromPath('file', imageFile.path));
 
-      // 1. Send Description with Context
       request.fields['description'] = "$description. ($medicalContext)";
-
-      // 2. Send Mode (Crucial for Backend Prompt Selection)
       request.fields['mode'] = mode;
 
       var response = await http.Response.fromStream(await request.send());

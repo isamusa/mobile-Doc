@@ -103,10 +103,11 @@ class _ProfileSetupScreenState extends State<ProfileSetupScreen> {
       }
     } on FirebaseAuthException catch (e) {
       String msg = "Registration Failed";
-      if (e.code == 'weak-password')
+      if (e.code == 'weak-password') {
         msg = "The password provided is too weak.";
-      else if (e.code == 'email-already-in-use')
+      } else if (e.code == 'email-already-in-use') {
         msg = "An account already exists for this phone number.";
+      }
 
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(

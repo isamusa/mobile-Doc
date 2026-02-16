@@ -1,8 +1,8 @@
 import 'package:flutter/material.dart';
-import 'package:firebase_auth/firebase_auth.dart';
+import 'package:shared_preferences/shared_preferences.dart';
+import 'dart:convert';
 import '../theme/app_theme.dart';
 import '../services/patient_data_service.dart';
-import 'medical_screen.dart'; // Ensure this exists or point to ProfileScreen for history
 
 class HomeScreen extends StatefulWidget {
   final VoidCallback onChatTap;
@@ -17,19 +17,30 @@ class HomeScreen extends StatefulWidget {
 
 class _HomeScreenState extends State<HomeScreen> {
   String _patientName = "User";
+  Map<String, dynamic>? _profile;
+  List<String> _pendingTests = [];
   String _medicationReminder = "No active medications.";
   String _healthInsight = "Stay hydrated today.";
   bool _hasPrescriptions = false;
+  bool _isLoading = true;
 
   @override
   void initState() {
     super.initState();
-    _loadUserData();
+    _loadDashboardData();
   }
 
-  Future<void> _loadUserData() async {
-    // 1. Get Name from Profile
+  Future<void> _loadDashboardData() async {
+    setState(() => _isLoading = true);
+
+    // 1. Load Profile and Context
     final contextStr = await PatientDataService.getContextString();
+    final prefs = await SharedPreferences.getInstance();
+    final profileData = prefs.getString('patient_profile');
+
+    // 2. Load Pending AI Suggestions (Human-in-the-Loop logic)
+    final tests = await PatientDataService.getPendingTests();
+    final meds = await PatientDataService.getPrescriptions();
 
     String name = "User";
     if (contextStr.contains("- Name: ")) {
@@ -38,443 +49,347 @@ class _HomeScreenState extends State<HomeScreen> {
       if (end != -1) name = contextStr.substring(start, end).trim();
     }
 
-    // 2. Get Prescriptions for Insights
-    final meds = await PatientDataService.getPrescriptions();
-
-    // 3. Logic for Insights
+    // 3. Logic for Insights & Reminders
     String medText = "No active medications.";
     String insight = "Great job keeping healthy!";
-    bool hasMeds = false;
+    bool hasMeds = meds.isNotEmpty;
 
-    if (meds.isNotEmpty) {
-      hasMeds = true;
-      medText = "Time to take: ${meds.first.split('-')[0].trim()}";
-      insight = "Adhere to your dosage for full recovery.";
+    if (hasMeds) {
+      medText = "Next dose: ${meds.first.split('-')[0].trim()}";
+      insight = "Complete your full course as advised.";
     } else if (contextStr.contains("Malaria")) {
-      insight = "Use a mosquito net tonight.";
+      insight = "Ensure you sleep under a treated net tonight.";
     }
 
     if (mounted) {
       setState(() {
         _patientName = name;
+        _profile = profileData != null ? jsonDecode(profileData) : null;
+        _pendingTests = tests;
         _medicationReminder = medText;
         _healthInsight = insight;
         _hasPrescriptions = hasMeds;
+        _isLoading = false;
       });
     }
   }
 
   @override
   Widget build(BuildContext context) {
-    // Determine greeting based on time
     final hour = DateTime.now().hour;
-    String greeting = "Good Morning,";
-    if (hour >= 12 && hour < 17)
-      greeting = "Good Afternoon,";
-    else if (hour >= 17) greeting = "Good Evening,";
+    String greeting = hour < 12
+        ? "Good Morning,"
+        : hour < 17
+            ? "Good Afternoon,"
+            : "Good Evening,";
 
-    return SafeArea(
-      child: Scaffold(
-        body: CustomScrollView(
-          slivers: [
-            SliverAppBar(
-              pinned: true,
-              backgroundColor: Colors.white,
-              elevation: 1,
-              title: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Text(greeting,
-                      style: const TextStyle(
-                          fontSize: 12, color: AppColors.textLight)),
-                  Text(_patientName,
-                      style: const TextStyle(
-                          fontSize: 20,
-                          fontWeight: FontWeight.bold,
-                          color: AppColors.textDark)),
-                ],
-              ),
-              actions: [
-                IconButton(
-                  icon: const Icon(Icons.refresh, color: AppColors.textDark),
-                  onPressed: _loadUserData,
-                ),
-                Stack(
-                  children: [
-                    IconButton(
-                      icon: const Icon(Icons.notifications_none,
-                          color: AppColors.textDark),
-                      onPressed: () {},
+    return Scaffold(
+      backgroundColor: const Color(0xFFF8FAFC),
+      body: _isLoading
+          ? const Center(child: CircularProgressIndicator())
+          : RefreshIndicator(
+              onRefresh: _loadDashboardData,
+              child: CustomScrollView(
+                slivers: [
+                  _buildAppBar(greeting),
+                  SliverPadding(
+                    padding: const EdgeInsets.all(16),
+                    sliver: SliverList(
+                      delegate: SliverChildListDelegate([
+                        _buildHealthSnapshot(),
+                        const SizedBox(height: 24),
+                        if (_pendingTests.isNotEmpty) _buildPendingActions(),
+                        const SizedBox(height: 24),
+                        _buildQuickActions(),
+                        const SizedBox(height: 24),
+                        _buildInsights(),
+                        const SizedBox(height: 40),
+                      ]),
                     ),
-                    if (_hasPrescriptions)
-                      Positioned(
-                        right: 8,
-                        top: 8,
-                        child: Container(
-                          width: 8,
-                          height: 8,
-                          decoration: const BoxDecoration(
-                              color: Colors.red, shape: BoxShape.circle),
-                        ),
-                      ),
-                  ],
-                ),
-              ],
-              bottom: PreferredSize(
-                preferredSize: const Size.fromHeight(70),
-                child: Padding(
-                  padding:
-                      const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
-                  child: Row(
-                    children: [
-                      Expanded(
-                        child: TextField(
-                          decoration: InputDecoration(
-                            hintText: 'Search symptoms, food, tips...',
-                            prefixIcon: const Icon(Icons.search),
-                            contentPadding: EdgeInsets.zero,
-                            border: OutlineInputBorder(
-                              borderRadius: BorderRadius.circular(10),
-                              borderSide: BorderSide.none,
-                            ),
-                            filled: true,
-                            fillColor: Colors.grey[100],
-                          ),
-                        ),
-                      ),
-                      const SizedBox(width: 12),
-                      ConstrainedBox(
-                        constraints:
-                            const BoxConstraints(minWidth: 64, maxWidth: 120),
-                        child: ElevatedButton(
-                          style: ElevatedButton.styleFrom(
-                              backgroundColor: AppColors.primary,
-                              foregroundColor: Colors.white,
-                              padding: const EdgeInsets.symmetric(
-                                  horizontal: 12, vertical: 12),
-                              shape: RoundedRectangleBorder(
-                                  borderRadius: BorderRadius.circular(10))),
-                          onPressed: () => widget.onChatTap(),
-                          child: const FittedBox(child: Text('Ask AI')),
-                        ),
-                      )
-                    ],
                   ),
-                ),
-              ),
-            ),
-            SliverPadding(
-              padding: const EdgeInsets.all(16),
-              sliver: SliverList(
-                delegate: SliverChildListDelegate(
-                  [
-                    // Metrics Row
-                    Row(
-                      children: [
-                        Expanded(
-                          child: _MetricCard(
-                            title: 'Status',
-                            value: _hasPrescriptions ? 'Treatment' : 'Healthy',
-                            icon: Icons.favorite,
-                            color: _hasPrescriptions
-                                ? Colors.orange
-                                : AppColors.primary,
-                          ),
-                        ),
-                        const SizedBox(width: 12),
-                        const Expanded(
-                          child: _MetricCard(
-                            title: 'Calories',
-                            value:
-                                '1,850', // Placeholder for now, connect to Diet Service later
-                            icon: Icons.local_fire_department,
-                            color: Colors.deepOrange,
-                          ),
-                        ),
-                      ],
-                    ),
-
-                    const SizedBox(height: 16),
-
-                    // Quick Actions Grid
-                    const Text('Quick Actions',
-                        style: TextStyle(
-                            fontSize: 16, fontWeight: FontWeight.bold)),
-                    const SizedBox(height: 8),
-                    GridView.count(
-                      crossAxisCount: 3,
-                      shrinkWrap: true,
-                      physics: const NeverScrollableScrollPhysics(),
-                      crossAxisSpacing: 8,
-                      mainAxisSpacing: 8,
-                      children: [
-                        _SquareAction(
-                            icon: Icons.medical_services,
-                            label: 'Symptom',
-                            onTap: widget.onChatTap),
-                        _SquareAction(
-                            icon: Icons.camera_alt,
-                            label: 'Diet Scan',
-                            onTap: widget.onDietTap),
-
-                        // Link to History / Medical Profile
-                        _SquareAction(
-                            icon: Icons.history,
-                            label: 'History',
-                            onTap: () {
-                              // If MedicalScreen exists, navigate there, else fallback logic
-                              // Assuming MedicalScreen or similar profile view is available
-                              try {
-                                Navigator.pushNamed(context,
-                                    '/medical'); // or push MaterialPageRoute
-                              } catch (e) {
-                                // Fallback if route not defined
-                              }
-                            }),
-
-                        _SquareAction(
-                            icon: Icons.local_hospital,
-                            label: 'Find Clinic',
-                            onTap: () {}),
-                        _SquareAction(
-                            icon: Icons.insights,
-                            label: 'Trends',
-                            onTap: () {}),
-                        _SquareAction(
-                            icon: Icons.settings,
-                            label: 'Settings',
-                            onTap: () {}),
-                      ],
-                    ),
-
-                    const SizedBox(height: 16),
-
-                    // Tips Carousel
-                    const Text('Health Tips',
-                        style: TextStyle(
-                            fontSize: 16, fontWeight: FontWeight.bold)),
-                    const SizedBox(height: 8),
-                    SizedBox(
-                      height: 120,
-                      child: ListView(
-                        scrollDirection: Axis.horizontal,
-                        children: const [
-                          _TipCard(
-                              title: 'Stay Hydrated',
-                              subtitle: 'Drink 8 glasses of water daily.'),
-                          _TipCard(
-                              title: 'Balanced Diet',
-                              subtitle: 'Include vegetables in each meal.'),
-                          _TipCard(
-                              title: 'Exercise',
-                              subtitle: '30 mins walk every day.'),
-                        ],
-                      ),
-                    ),
-
-                    const SizedBox(height: 16),
-
-                    const Text('Recent Insights',
-                        style: TextStyle(
-                            fontSize: 16, fontWeight: FontWeight.bold)),
-                    const SizedBox(height: 8),
-
-                    // Dynamic Insight Tiles
-                    if (_hasPrescriptions)
-                      _InsightTile(
-                        title: 'Medication Reminder',
-                        subtitle: _medicationReminder,
-                        icon: Icons.medication,
-                        color: AppColors.primary,
-                      )
-                    else
-                      const _InsightTile(
-                        title: 'All Clear',
-                        subtitle: 'No pending medications. Keep it up!',
-                        icon: Icons.check_circle,
-                        color: Colors.green,
-                      ),
-
-                    _InsightTile(
-                      title: 'Health Tip',
-                      subtitle: _healthInsight,
-                      icon: Icons.lightbulb,
-                      color: Colors.orange,
-                    ),
-                    const SizedBox(height: 40),
-                  ],
-                ),
-              ),
-            ),
-          ],
-        ),
-      ),
-    );
-  }
-}
-
-class _MetricCard extends StatelessWidget {
-  final String title;
-  final String value;
-  final IconData icon;
-  final Color color;
-
-  const _MetricCard(
-      {required this.title,
-      required this.value,
-      required this.icon,
-      required this.color});
-
-  @override
-  Widget build(BuildContext context) {
-    return Card(
-      elevation: 0,
-      color: Colors.white,
-      shape: RoundedRectangleBorder(
-          borderRadius: BorderRadius.circular(12),
-          side: BorderSide(color: Colors.grey.shade200)),
-      child: Padding(
-        padding: const EdgeInsets.all(12),
-        child: Row(
-          children: [
-            CircleAvatar(
-                backgroundColor: color.withOpacity(0.15),
-                child: Icon(icon, color: color, size: 20)),
-            const SizedBox(width: 12),
-            Expanded(
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                mainAxisSize: MainAxisSize.min,
-                children: [
-                  Text(title,
-                      style: const TextStyle(
-                          color: AppColors.textLight, fontSize: 12),
-                      overflow: TextOverflow.ellipsis),
-                  const SizedBox(height: 4),
-                  Text(value,
-                      style: const TextStyle(
-                          fontSize: 18, fontWeight: FontWeight.bold),
-                      overflow: TextOverflow.ellipsis),
                 ],
               ),
-            )
+            ),
+    );
+  }
+
+  Widget _buildAppBar(String greeting) {
+    return SliverAppBar(
+      pinned: true,
+      expandedHeight: 120,
+      backgroundColor: Colors.white,
+      elevation: 0,
+      flexibleSpace: FlexibleSpaceBar(
+        titlePadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+        title: Column(
+          mainAxisAlignment: MainAxisAlignment.end,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text(greeting,
+                style:
+                    const TextStyle(fontSize: 12, color: AppColors.textLight)),
+            Text(_patientName,
+                style: const TextStyle(
+                    fontSize: 18,
+                    fontWeight: FontWeight.bold,
+                    color: AppColors.textDark)),
           ],
         ),
       ),
+      actions: [
+        IconButton(
+          icon: const Icon(Icons.refresh, color: AppColors.textDark),
+          onPressed: _loadDashboardData,
+        ),
+        _buildNotificationIcon(),
+      ],
+    );
+  }
+
+  Widget _buildNotificationIcon() {
+    return Stack(
+      children: [
+        IconButton(
+          icon: const Icon(Icons.notifications_none, color: AppColors.textDark),
+          onPressed: () {},
+        ),
+        if (_hasPrescriptions || _pendingTests.isNotEmpty)
+          Positioned(
+            right: 12,
+            top: 12,
+            child: Container(
+              width: 8,
+              height: 8,
+              decoration: const BoxDecoration(
+                  color: Colors.red, shape: BoxShape.circle),
+            ),
+          ),
+      ],
+    );
+  }
+
+  Widget _buildHealthSnapshot() {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        const Text("Health Snapshot",
+            style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold)),
+        const SizedBox(height: 12),
+        Card(
+          elevation: 0,
+          shape: RoundedRectangleBorder(
+              borderRadius: BorderRadius.circular(16),
+              side: BorderSide(color: Colors.grey.shade200)),
+          child: Padding(
+            padding: const EdgeInsets.all(16),
+            child: Row(
+              mainAxisAlignment: MainAxisAlignment.spaceAround,
+              children: [
+                _buildVitalMetric("Height", "${_profile?['height'] ?? '--'}",
+                    "cm", Icons.height, Colors.blue),
+                _buildVitalMetric("Weight", "${_profile?['weight'] ?? '--'}",
+                    "kg", Icons.monitor_weight, Colors.orange),
+                _buildVitalMetric("Age", "${_profile?['age'] ?? '--'}", "yrs",
+                    Icons.calendar_today, Colors.green),
+              ],
+            ),
+          ),
+        ),
+      ],
+    );
+  }
+
+  Widget _buildVitalMetric(
+      String label, String value, String unit, IconData icon, Color color) {
+    return Column(
+      children: [
+        Icon(icon, color: color, size: 20),
+        const SizedBox(height: 8),
+        Text(value,
+            style: const TextStyle(fontSize: 18, fontWeight: FontWeight.bold)),
+        Text("$label ($unit)",
+            style: const TextStyle(fontSize: 11, color: Colors.grey)),
+      ],
+    );
+  }
+
+  Widget _buildPendingActions() {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        const Text("Pending AI Suggestions",
+            style: TextStyle(
+                fontSize: 16,
+                fontWeight: FontWeight.bold,
+                color: Colors.orange)),
+        const SizedBox(height: 12),
+        ..._pendingTests.map((test) => Card(
+              color: Colors.orange.shade50,
+              elevation: 0,
+              margin: const EdgeInsets.only(bottom: 8),
+              shape: RoundedRectangleBorder(
+                  borderRadius: BorderRadius.circular(12),
+                  side: BorderSide(color: Colors.orange.shade100)),
+              child: ListTile(
+                leading: const Icon(Icons.science, color: Colors.orange),
+                title: Text(test,
+                    style: const TextStyle(
+                        fontWeight: FontWeight.bold, fontSize: 14)),
+                subtitle: const Text(
+                    "AI suggested this test based on your symptoms.",
+                    style: TextStyle(fontSize: 12)),
+                trailing: IconButton(
+                  icon: const Icon(Icons.check_circle, color: Colors.orange),
+                  onPressed: () async {
+                    await PatientDataService.removePendingTest(test);
+                    _loadDashboardData();
+                  },
+                ),
+              ),
+            )),
+      ],
+    );
+  }
+
+  Widget _buildQuickActions() {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        const Text("Quick Actions",
+            style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold)),
+        const SizedBox(height: 12),
+        GridView.count(
+          crossAxisCount: 3,
+          shrinkWrap: true,
+          physics: const NeverScrollableScrollPhysics(),
+          mainAxisSpacing: 12,
+          crossAxisSpacing: 12,
+          children: [
+            _ActionSquare(
+                icon: Icons.chat_bubble_rounded,
+                label: "Ask AI Doc",
+                color: Colors.blue,
+                onTap: widget.onChatTap),
+            _ActionSquare(
+                icon: Icons.fastfood_rounded,
+                label: "Scan Diet",
+                color: Colors.green,
+                onTap: widget.onDietTap),
+            _ActionSquare(
+                icon: Icons.history_rounded,
+                label: "Med History",
+                color: Colors.purple,
+                onTap: () => Navigator.pushNamed(context, '/medical')),
+          ],
+        ),
+      ],
+    );
+  }
+
+  Widget _buildInsights() {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        const Text("Daily Insights",
+            style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold)),
+        const SizedBox(height: 12),
+        _InsightCard(
+          title: "Medication",
+          desc: _medicationReminder,
+          icon: Icons.medication_liquid,
+          color: _hasPrescriptions ? Colors.red : Colors.grey,
+        ),
+        const SizedBox(height: 8),
+        _InsightCard(
+          title: "Doctor's Tip",
+          desc: _healthInsight,
+          icon: Icons.tips_and_updates,
+          color: Colors.amber,
+        ),
+      ],
     );
   }
 }
 
-class _SquareAction extends StatelessWidget {
+class _ActionSquare extends StatelessWidget {
   final IconData icon;
   final String label;
+  final Color color;
   final VoidCallback onTap;
 
-  const _SquareAction(
-      {required this.icon, required this.label, required this.onTap});
+  const _ActionSquare(
+      {required this.icon,
+      required this.label,
+      required this.color,
+      required this.onTap});
 
   @override
   Widget build(BuildContext context) {
-    return GestureDetector(
+    return InkWell(
       onTap: onTap,
-      child: Card(
-        elevation: 0,
-        color: AppColors.background,
-        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
-        child: Padding(
-          padding: const EdgeInsets.all(8),
-          child: Column(
-            mainAxisAlignment: MainAxisAlignment.center,
-            children: [
-              Container(
-                  padding: const EdgeInsets.all(10),
-                  decoration: BoxDecoration(
-                      color: Colors.white,
-                      shape: BoxShape.circle,
-                      boxShadow: [
-                        BoxShadow(
-                            color: Colors.black.withOpacity(0.05),
-                            blurRadius: 4)
-                      ]),
-                  child: Icon(icon, color: AppColors.primary, size: 22)),
-              const SizedBox(height: 8),
-              Text(label,
-                  textAlign: TextAlign.center,
-                  style: const TextStyle(
-                      fontSize: 11, fontWeight: FontWeight.w500)),
-            ],
-          ),
+      child: Container(
+        decoration: BoxDecoration(
+            color: Colors.white,
+            borderRadius: BorderRadius.circular(16),
+            border: Border.all(color: Colors.grey.shade200)),
+        child: Column(
+          mainAxisAlignment: MainAxisAlignment.center,
+          children: [
+            Icon(icon, color: color, size: 28),
+            const SizedBox(height: 8),
+            Text(label,
+                style:
+                    const TextStyle(fontSize: 11, fontWeight: FontWeight.w600),
+                textAlign: TextAlign.center),
+          ],
         ),
       ),
     );
   }
 }
 
-class _TipCard extends StatelessWidget {
+class _InsightCard extends StatelessWidget {
   final String title;
-  final String subtitle;
-
-  const _TipCard({required this.title, required this.subtitle});
-
-  @override
-  Widget build(BuildContext context) {
-    return SizedBox(
-      width: 200,
-      child: Card(
-        elevation: 0,
-        color: const Color(0xFFE8EAF6), // Light Indigo
-        margin: const EdgeInsets.only(right: 12),
-        child: Padding(
-          padding: const EdgeInsets.all(16),
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            mainAxisAlignment: MainAxisAlignment.center,
-            children: [
-              Text(title,
-                  style: const TextStyle(
-                      fontWeight: FontWeight.bold, color: Color(0xFF3F51B5))),
-              const SizedBox(height: 6),
-              Text(subtitle,
-                  style:
-                      const TextStyle(color: Color(0xFF5C6BC0), fontSize: 12),
-                  maxLines: 2,
-                  overflow: TextOverflow.ellipsis),
-            ],
-          ),
-        ),
-      ),
-    );
-  }
-}
-
-class _InsightTile extends StatelessWidget {
-  final String title;
-  final String subtitle;
+  final String desc;
   final IconData icon;
   final Color color;
 
-  const _InsightTile(
+  const _InsightCard(
       {required this.title,
-      required this.subtitle,
+      required this.desc,
       required this.icon,
       required this.color});
 
   @override
   Widget build(BuildContext context) {
-    return Card(
-      elevation: 0,
-      margin: const EdgeInsets.only(bottom: 8),
-      shape: RoundedRectangleBorder(
-          borderRadius: BorderRadius.circular(12),
-          side: BorderSide(color: Colors.grey.shade100)),
-      child: ListTile(
-        leading: CircleAvatar(
-            backgroundColor: color.withOpacity(0.12),
-            child: Icon(icon, color: color, size: 20)),
-        title: Text(title,
-            style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 14)),
-        subtitle: Text(subtitle, style: const TextStyle(fontSize: 12)),
-        trailing: const Icon(Icons.chevron_right, color: Colors.grey),
+    return Container(
+      padding: const EdgeInsets.all(16),
+      decoration: BoxDecoration(
+          color: Colors.white,
+          borderRadius: BorderRadius.circular(16),
+          border: Border.all(color: Colors.grey.shade100)),
+      child: Row(
+        children: [
+          CircleAvatar(
+              backgroundColor: color.withValues(alpha: 0.1),
+              child: Icon(icon, color: color, size: 20)),
+          const SizedBox(width: 16),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(title,
+                    style: const TextStyle(
+                        fontSize: 12,
+                        color: Colors.grey,
+                        fontWeight: FontWeight.w600)),
+                Text(desc,
+                    style: const TextStyle(
+                        fontSize: 14, fontWeight: FontWeight.bold)),
+              ],
+            ),
+          ),
+        ],
       ),
     );
   }
