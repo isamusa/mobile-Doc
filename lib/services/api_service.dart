@@ -1,6 +1,7 @@
 import 'dart:convert';
 import 'dart:io';
 import 'package:http/http.dart' as http;
+import 'package:image/image.dart' as img;
 import '../config/environment.dart';
 import 'patient_data_service.dart';
 
@@ -230,16 +231,47 @@ class ApiService {
   }
 
   /// 👁️ VISION: Analyze Image (Diet, Lab, General)
+  /// Compresses image before upload to reduce bandwidth and improve UX
+  static Future<String> _compressImage(File imageFile) async {
+    try {
+      // Read the image file
+      final imageBytes = await imageFile.readAsBytes();
+      final image = img.decodeImage(imageBytes);
+
+      if (image == null) return imageFile.path;
+
+      // Resize to max 1024x1024 and compress to 85% quality
+      final compressed = img.copyResize(image,
+          width: 1024, height: 1024, maintainAspect: true);
+
+      // Encode as JPEG with 85% quality
+      final jpegBytes = img.encodeJpg(compressed, quality: 85);
+
+      // Write compressed image to temp file
+      final tempDir = await Directory.systemTemp.createTemp();
+      final compressedFile = File('${tempDir.path}/compressed_image.jpg');
+      await compressedFile.writeAsBytes(jpegBytes);
+
+      return compressedFile.path;
+    } catch (e) {
+      // If compression fails, return original file
+      return imageFile.path;
+    }
+  }
+
   static Future<String> analyzeImage(File imageFile, String description,
       {String mode = 'general'}) async {
     try {
       String medicalContext = await PatientDataService.getContextString();
 
+      // Compress image before upload
+      final compressedImagePath = await _compressImage(imageFile);
+
       var request =
           http.MultipartRequest('POST', Uri.parse('$_baseUrl/analyze_image'));
       request.headers.addAll(_headers);
       request.files
-          .add(await http.MultipartFile.fromPath('file', imageFile.path));
+          .add(await http.MultipartFile.fromPath('file', compressedImagePath));
 
       request.fields['description'] = "$description. ($medicalContext)";
       request.fields['mode'] = mode;
