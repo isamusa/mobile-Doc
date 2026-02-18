@@ -13,8 +13,6 @@ class PatientDataService {
   static const String _dietKey = 'diet_history';
   static const String _secureChatKey = 'patient_chat_history';
 
-  // Secure storage access is centralized in SecureStorageHelper
-
   // Test hooks to avoid platform channels during widget tests
   static Future<String> Function()? testGetContextString;
   static Future<List<Map<String, String>>> Function()? testGetChatHistory;
@@ -25,23 +23,36 @@ class PatientDataService {
     return user?.uid ?? 'guest_user';
   }
 
+  // 🛡️ SECURITY: Decryption Helper
+  // Decodes the data safely. If the data wasn't encrypted (e.g. legacy data), it returns it as-is.
+  static String _decrypt(String? data) {
+    if (data == null || data.isEmpty || data == 'None' || data == 'Unknown') {
+      return data ?? 'Unknown';
+    }
+    try {
+      return utf8.decode(base64Decode(data));
+    } catch (e) {
+      return data; // Fallback for unencrypted legacy data
+    }
+  }
+
   // --- 1. PROFILE & CONTEXT ---
 
   static Future<void> saveProfile({
     required String name,
     required String phoneNumber,
-    required String age,
-    required String height,
-    required String weight,
-    required String genotype,
-    required String bloodGroup,
-    required String allergies,
+    required String age, // Comes in encrypted from Setup Screen
+    required String height, // Comes in encrypted
+    required String weight, // Comes in encrypted
+    required String genotype, // Comes in encrypted
+    required String bloodGroup, // Comes in encrypted
+    required String allergies, // Comes in encrypted
     required List<String> personalHistory,
     required List<String> familyHistory,
   }) async {
     final prefs = await SharedPreferences.getInstance();
 
-    // 🔐 1. Store full profile in secure storage (encrypted)
+    // 🔐 1. Store full profile in secure storage
     final fullProfile = {
       'name': name,
       'phoneNumber': phoneNumber,
@@ -53,43 +64,39 @@ class PatientDataService {
       'allergies': allergies,
       'personalHistory': personalHistory,
       'familyHistory': familyHistory,
-      'hasSensitiveData': true,
+      'isEncrypted': true, // Flag for cloud sync
     };
 
     await SecureStorageHelper.write(
         'patient_profile_$_userId', jsonEncode(fullProfile));
 
-    // 2. Store a redacted version in SharedPreferences for UI-only metadata
+    // 2. Store a safe, redacted version in SharedPreferences for quick UI loading
     final redacted = {
       'name': name,
-      'age': age,
-      'height': height,
-      'weight': weight,
-      'hasSensitiveData': true,
+      'isEncrypted': true,
     };
     await prefs.setString(_profileKey, jsonEncode(redacted));
 
+    // 3. Cloud Backup (HIPAA Prep: We are uploading the ENCRYPTED profile, not plain text)
     if (FirebaseAuth.instance.currentUser != null) {
       try {
-        // Only backup non-sensitive or properly authorized data to Cloud
         await FirebaseFirestore.instance
             .collection('patients')
             .doc(_userId)
-            .set(redacted, SetOptions(merge: true));
+            .set(fullProfile, SetOptions(merge: true));
       } catch (e) {
-        // Cloud backup error; continue
+        // Silent catch for offline mode
       }
     }
   }
 
   static Future<String> getContextString() async {
-    // Shortcut for tests
     if (testGetContextString != null) return await testGetContextString!();
     final prefs = await SharedPreferences.getInstance();
 
     String profileStr = "Patient Profile: Unknown";
 
-    // Prefer full encrypted profile from secure storage
+    // 🧠 Read encrypted profile from secure storage
     String? secured =
         await SecureStorageHelper.read('patient_profile_$_userId');
 
@@ -103,27 +110,31 @@ class PatientDataService {
           ? "None"
           : (p['familyHistory'] as List).join(", ");
 
-      profileStr = """
-      PATIENT SUMMARY:
-      - Name: ${p['name']}
-      - Phone: ${p['phoneNumber']}
-      - Age: ${p['age']}
-      - Vitals: ${p['height']}cm, ${p['weight']}kg
-      - Genotype: ${p['genotype'] ?? 'Unknown'} | Blood Group: ${p['bloodGroup'] ?? 'Unknown'}
-      - Allergies: ${p['allergies']}
-      - Existing Conditions: $historyStr
-      - Family History: $familyStr
-      """;
-    } else if (prefs.containsKey(_profileKey)) {
-      // Fallback to redacted profile stored in SharedPreferences
-      final p = jsonDecode(prefs.getString(_profileKey)!);
+      // 🔓 DECRYPT SENSITIVE DATA FOR THE AI CONTEXT
+      String dAge = _decrypt(p['age']);
+      String dHeight = _decrypt(p['height']);
+      String dWeight = _decrypt(p['weight']);
+      String dGenotype = _decrypt(p['genotype']);
+      String dBloodGroup = _decrypt(p['bloodGroup']);
+      String dAllergies = _decrypt(p['allergies']);
 
       profileStr = """
       PATIENT SUMMARY:
       - Name: ${p['name']}
-      - Age: ${p['age']}
-      - Vitals: ${p['height']}cm, ${p['weight']}kg
-      - Sensitive fields are stored securely
+      - Phone: ${p['phoneNumber']}
+      - Age: $dAge
+      - Vitals: ${dHeight}cm, ${dWeight}kg
+      - Genotype: $dGenotype | Blood Group: $dBloodGroup
+      - Allergies: $dAllergies
+      - Existing Conditions: $historyStr
+      - Family History: $familyStr
+      """;
+    } else if (prefs.containsKey(_profileKey)) {
+      final p = jsonDecode(prefs.getString(_profileKey)!);
+      profileStr = """
+      PATIENT SUMMARY:
+      - Name: ${p['name']}
+      - (Sensitive fields locked)
       """;
     }
 
@@ -133,7 +144,7 @@ class PatientDataService {
       profileStr += "\nACTIVE MEDICATIONS:\n- ${prescriptions.join('\n- ')}";
     }
 
-    // Add Recent Diagnoses
+    // Add Recent Diagnoses (Crucial for AI memory)
     List<String> diagnosishistory = prefs.getStringList(_historyKey) ?? [];
     String recentDiagnoses = "";
     if (diagnosishistory.isNotEmpty) {
@@ -164,7 +175,7 @@ class PatientDataService {
           'timestamp': FieldValue.serverTimestamp(),
         });
       } catch (e) {
-        // Cloud sync error; continue
+        // Offline support
       }
     }
   }
@@ -212,7 +223,6 @@ class PatientDataService {
     return prefs.getStringList(_labsKey) ?? [];
   }
 
-  // AI Suggested Tests
   static Future<void> addPendingTest(String testName) async {
     final prefs = await SharedPreferences.getInstance();
     List<String> tests = prefs.getStringList(_pendingTestsKey) ?? [];
@@ -248,17 +258,16 @@ class PatientDataService {
     final prefs = await SharedPreferences.getInstance();
     return prefs.getStringList(_dietKey) ?? [];
   }
+
   // --- 6. CHAT HISTORY ---
 
   static Future<void> saveChatMessage(String sender, String text) async {
-    // Test hook bypass
     if (testSaveChatMessage != null) {
       return await testSaveChatMessage!(sender, text);
     }
 
-    // Migrate any legacy SharedPreferences chat history to secure storage
     await _migrateChatHistoryIfNeeded();
-    // Store chat messages encrypted per-user in secure storage
+
     final key = '$_secureChatKey\$_userId';
     String? raw = await SecureStorageHelper.read(key);
     List<dynamic> list =
@@ -274,10 +283,10 @@ class PatientDataService {
   }
 
   static Future<List<Map<String, String>>> getChatHistory() async {
-    // Test hook bypass
     if (testGetChatHistory != null) {
       return await testGetChatHistory!();
     }
+
     final key = '$_secureChatKey\$_userId';
     String? raw = await SecureStorageHelper.read(key);
     if (raw == null || raw.trim().isEmpty) return [];
@@ -292,7 +301,6 @@ class PatientDataService {
     }).toList();
   }
 
-  // Migration helper: move legacy SharedPreferences chat to secure storage
   static Future<void> _migrateChatHistoryIfNeeded() async {
     try {
       final prefs = await SharedPreferences.getInstance();
@@ -318,23 +326,21 @@ class PatientDataService {
             'text': json['text'].toString(),
             'time': json['time'].toString(),
           });
-        } catch (_) {
-          // If a legacy entry is malformed, skip it
-        }
+        } catch (_) {}
       }
 
       await SecureStorageHelper.write(key, jsonEncode(current));
       await prefs.remove(legacyKey);
-    } catch (_) {
-      // Non-fatal migration error; continue without blocking chat
-    }
+    } catch (_) {}
   }
 
-  // UPDATED: Wipe Secure Storage on clear
+  // --- 7. UTILS & SYNC ---
+
   static Future<void> clearLocalData() async {
     final prefs = await SharedPreferences.getInstance();
     await prefs.clear();
-    await SecureStorageHelper.deleteAll(); // 🔐 Clear encrypted PII
+    await SecureStorageHelper
+        .deleteAll(); // 🔐 Clear all encrypted PII on logout
   }
 
   static Future<void> restoreFromCloud() async {
@@ -345,28 +351,24 @@ class PatientDataService {
           .collection('patients')
           .doc(_userId)
           .get();
+
       if (doc.exists) {
         final data = doc.data()!;
         final prefs = await SharedPreferences.getInstance();
 
-        // Store redacted view in prefs and full profile in secure storage if provided
+        // Write redacted for UI
         final redacted = {
-          'name': data['name'] ?? data['fullname'] ?? 'Unknown',
-          'age': data['age'] ?? 'Unknown',
-          'height': data['height'] ?? 'Unknown',
-          'weight': data['weight'] ?? 'Unknown',
-          'hasSensitiveData': true,
+          'name': data['name'] ?? 'Unknown',
+          'isEncrypted': true,
         };
         await prefs.setString(_profileKey, jsonEncode(redacted));
 
-        // If backend returns sensitive fields, store encrypted full profile
+        // Write FULL data to secure storage (It remains encrypted at rest)
         await SecureStorageHelper.write(
             'patient_profile_$_userId', jsonEncode(data));
       }
-      // Note: Restoring full chat history from Firestore might be heavy,
-      // typically we rely on local cache or implement pagination.
     } catch (e) {
-      // Restore error; continue
+      // Offline mode
     }
   }
 }

@@ -19,7 +19,6 @@ class _ChatScreenState extends State<ChatScreen> {
   late stt.SpeechToText _speechToText;
   bool _isListening = false;
 
-  // Updated message structure to include metadata for Human-in-the-loop validation
   List<Map<String, dynamic>> _messages = [
     {
       'sender': 'bot',
@@ -56,32 +55,19 @@ class _ChatScreenState extends State<ChatScreen> {
             );
           }
         },
-        onStatus: (status) {
-          // Handle status changes silently
-        },
       );
       if (!available && mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(
-              content: Text('Speech recognition not available on this device')),
+          const SnackBar(content: Text('Speech recognition not available')),
         );
       }
     } catch (e) {
-      // Speech to text not available, continue without voice
+      // Continue without voice
     }
   }
 
   Future<void> _toggleMic() async {
-    if (!_speechToText.isAvailable) {
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(
-              content: Text('Speech recognition not available'),
-              backgroundColor: Colors.orange),
-        );
-      }
-      return;
-    }
+    if (!_speechToText.isAvailable) return;
 
     if (!_isListening) {
       try {
@@ -152,11 +138,25 @@ class _ChatScreenState extends State<ChatScreen> {
     });
   }
 
+  // 🧠 MEMORY HELPER: Get last few messages to send to AI
+  String _getRecentHistory() {
+    if (_messages.isEmpty) return "";
+    int start = _messages.length > 6 ? _messages.length - 6 : 0;
+    var recent = _messages.sublist(start);
+    return recent.map((m) {
+      String role = m['sender'] == 'user' ? 'PATIENT' : 'DOCTOR';
+      return "$role: ${m['text']}";
+    }).join("\n");
+  }
+
   void _sendMessage({String? text}) async {
     final input = text ?? _controller.text;
     if (input.trim().isEmpty) return;
 
     if (text == null) _controller.clear();
+
+    // 1. Gather history before adding new message
+    String historyText = _getRecentHistory();
 
     setState(() {
       _messages.add({'sender': 'user', 'text': input, 'metadata': null});
@@ -166,66 +166,27 @@ class _ChatScreenState extends State<ChatScreen> {
 
     await PatientDataService.saveChatMessage('user', input);
 
+    // 2. Build Enriched Prompt
+    String enrichedInput = historyText.isNotEmpty
+        ? "[RECENT CHAT HISTORY]:\n$historyText\n\n[CURRENT MESSAGE]: $input"
+        : input;
+
     try {
-      // Returns structured GemmaResponse object for validation
-      final GemmaResponse response = await ApiService.sendToGemma(input);
+      // 3. Send to AI
+      final dynamic response = await ApiService.sendToGemma(enrichedInput);
 
-      // Detect clarification responses (validator asked for more info)
-      final bool isClarification = response.suggestedDiagnosis == null &&
-          response.suggestedPrescriptions.isEmpty &&
-          response.suggestedTests.isEmpty &&
-          response.botReply.toLowerCase().contains('need more information');
+      await PatientDataService.saveChatMessage('bot', response.botReply);
 
-      if (isClarification) {
-        // Save the bot clarification as a regular message but without clinical metadata
-        await PatientDataService.saveChatMessage('bot', response.botReply);
-        if (mounted) {
-          setState(() {
-            _messages.add(
-                {'sender': 'bot', 'text': response.botReply, 'metadata': null});
+      // 4. Update UI - ALWAYS show the text message, NO blocking modals
+      if (mounted) {
+        setState(() {
+          _messages.add({
+            'sender': 'bot',
+            'text': response.botReply,
+            'metadata': response, // Pass metadata to trigger the Action Card
           });
-          _scrollToBottom();
-          // Prompt the user for more details in a focused dialog
-          showDialog(
-            context: context,
-            builder: (ctx) => AlertDialog(
-              title: const Text('More details needed'),
-              content: Text(response.botReply),
-              actions: [
-                TextButton(
-                  onPressed: () {
-                    Navigator.pop(ctx);
-                  },
-                  child: const Text('Dismiss'),
-                ),
-                ElevatedButton(
-                  style: ElevatedButton.styleFrom(
-                      backgroundColor: AppColors.primary),
-                  onPressed: () {
-                    Navigator.pop(ctx);
-                    // Focus the input field so the user can provide more detail
-                    FocusScope.of(context).requestFocus(FocusNode());
-                    // Optionally, encourage more detail by setting hint text
-                  },
-                  child: const Text('Provide Details'),
-                ),
-              ],
-            ),
-          );
-        }
-      } else {
-        await PatientDataService.saveChatMessage('bot', response.botReply);
-
-        if (mounted) {
-          setState(() {
-            _messages.add({
-              'sender': 'bot',
-              'text': response.botReply,
-              'metadata': response, // Metadata used for confirmation UI
-            });
-          });
-          _scrollToBottom();
-        }
+        });
+        _scrollToBottom();
       }
     } catch (e) {
       if (mounted) {
@@ -242,83 +203,110 @@ class _ChatScreenState extends State<ChatScreen> {
     }
   }
 
-  // Confirmation UI for clinical actions
-  Widget _buildActionCard(GemmaResponse data) {
-    if (data.suggestedDiagnosis == null &&
-        data.suggestedPrescriptions.isEmpty) {
-      return const SizedBox();
+  // 🩺 INLINE ACTION CARD (Replaces the annoying Modal)
+  Widget _buildActionCard(dynamic data) {
+    // Only show if there is actually a diagnosis or test suggested
+    bool hasDiagnosis = data.suggestedDiagnosis != null &&
+        data.suggestedDiagnosis.toString().trim().isNotEmpty;
+    bool hasPrescriptions = data.suggestedPrescriptions != null &&
+        data.suggestedPrescriptions.isNotEmpty;
+    bool hasTests =
+        data.suggestedTests != null && data.suggestedTests.isNotEmpty;
+
+    if (!hasDiagnosis && !hasPrescriptions && !hasTests) {
+      return const SizedBox.shrink();
     }
 
     return Container(
-      margin: const EdgeInsets.only(top: 10, left: 36, bottom: 10),
-      padding: const EdgeInsets.all(12),
+      margin: const EdgeInsets.only(top: 4, left: 40, bottom: 16, right: 16),
+      padding: const EdgeInsets.all(16),
       decoration: BoxDecoration(
-        color: Colors.white,
-        borderRadius: BorderRadius.circular(12),
-        border: Border.all(color: AppColors.primary.withValues(alpha: 0.3)),
-        boxShadow: [
-          BoxShadow(
-              color: Colors.black.withValues(alpha: 0.05),
-              blurRadius: 4,
-              offset: const Offset(0, 2))
-        ],
+        color: Colors.orange.shade50,
+        borderRadius: BorderRadius.circular(16),
+        border: Border.all(color: Colors.orange.shade200),
       ),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
           Row(
-            children: const [
-              Icon(Icons.medical_services_outlined,
-                  size: 16, color: AppColors.primary),
-              SizedBox(width: 8),
-              Text("Suggested Actions",
-                  style: TextStyle(fontWeight: FontWeight.bold, fontSize: 13)),
+            children: [
+              Icon(Icons.local_hospital,
+                  size: 18, color: Colors.orange.shade800),
+              const SizedBox(width: 8),
+              Text(
+                "Tell Your Physical Doctor:",
+                style: TextStyle(
+                  fontWeight: FontWeight.bold,
+                  fontSize: 14,
+                  color: Colors.orange.shade900,
+                ),
+              ),
             ],
           ),
+          const SizedBox(height: 8),
+          Text(
+            "Please visit a clinic and show the doctor this summary:",
+            style: TextStyle(fontSize: 12, color: Colors.orange.shade800),
+          ),
           const Divider(),
-          if (data.suggestedDiagnosis != null)
+          if (hasDiagnosis)
             Padding(
-              padding: const EdgeInsets.symmetric(vertical: 2),
-              child: Text("Diagnosis: ${data.suggestedDiagnosis}",
-                  style: const TextStyle(fontSize: 12)),
+              padding: const EdgeInsets.symmetric(vertical: 4),
+              child: Text(
+                "• Suspected: ${data.suggestedDiagnosis}",
+                style:
+                    const TextStyle(fontSize: 13, fontWeight: FontWeight.w600),
+              ),
             ),
-          ...data.suggestedPrescriptions.map((p) => Padding(
-                padding: const EdgeInsets.symmetric(vertical: 2),
-                child: Text("Rx: $p", style: const TextStyle(fontSize: 12)),
-              )),
+          if (hasTests)
+            Padding(
+              padding: const EdgeInsets.symmetric(vertical: 4),
+              child: Text(
+                "• Request Tests: ${data.suggestedTests.join(', ')}",
+                style: const TextStyle(fontSize: 13),
+              ),
+            ),
+          if (hasPrescriptions)
+            Padding(
+              padding: const EdgeInsets.symmetric(vertical: 4),
+              child: Text(
+                "• Discuss Meds: ${data.suggestedPrescriptions.join(', ')}",
+                style: const TextStyle(fontSize: 13),
+              ),
+            ),
           const SizedBox(height: 12),
           Row(
             mainAxisAlignment: MainAxisAlignment.end,
             children: [
               TextButton(
-                onPressed: () =>
-                    setState(() => _messages.last['metadata'] = null),
-                child: const Text("Dismiss"),
+                onPressed: () {
+                  setState(() => _messages.last['metadata'] = null);
+                },
+                child: Text("Dismiss",
+                    style: TextStyle(color: Colors.grey.shade600)),
               ),
               ElevatedButton(
                 style: ElevatedButton.styleFrom(
-                  backgroundColor: AppColors.primary,
+                  backgroundColor: Colors.orange.shade600,
                   foregroundColor: Colors.white,
-                  padding:
-                      const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+                  elevation: 0,
+                  shape: RoundedRectangleBorder(
+                      borderRadius: BorderRadius.circular(8)),
                 ),
                 onPressed: () async {
-                  if (data.suggestedDiagnosis != null) {
+                  if (hasDiagnosis) {
                     await PatientDataService.addDiagnosis(
-                        data.suggestedDiagnosis!);
-                  }
-                  for (var rx in data.suggestedPrescriptions) {
-                    await PatientDataService.addPrescription(
-                        rx, "Confirmed via AI");
+                        "[AI Suspected] ${data.suggestedDiagnosis}");
                   }
                   if (mounted) {
-                    ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
-                        content: Text("Medical Record Updated Successfully")));
+                    ScaffoldMessenger.of(context).showSnackBar(
+                      const SnackBar(
+                          content: Text("Saved to your Medical Records")),
+                    );
                     setState(() => _messages.last['metadata'] = null);
                   }
                 },
-                child: const Text("Confirm & Save",
-                    style: TextStyle(fontSize: 12)),
+                child: const Text("Save to Records"),
               ),
             ],
           )
@@ -350,6 +338,7 @@ class _ChatScreenState extends State<ChatScreen> {
                 final msg = _messages[index];
                 final isUser = msg['sender'] == 'user';
                 return Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
                     _buildMessageBubble(msg['text']!, isUser),
                     if (msg['metadata'] != null)
@@ -367,7 +356,7 @@ class _ChatScreenState extends State<ChatScreen> {
   }
 
   Widget _buildMessageBubble(String text, bool isUser) {
-    bool isError = text.contains("🚨") || text.contains("⏳");
+    bool isError = text.contains("Network error");
 
     return Column(
       crossAxisAlignment:
@@ -380,14 +369,29 @@ class _ChatScreenState extends State<ChatScreen> {
               maxWidth: MediaQuery.of(context).size.width * 0.75,
             ),
             padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
-            margin: const EdgeInsets.only(bottom: 12),
+            margin: const EdgeInsets.only(bottom: 8),
             decoration: BoxDecoration(
               color: isUser ? AppColors.primary : Colors.white,
-              borderRadius: BorderRadius.circular(20),
+              borderRadius: BorderRadius.only(
+                topLeft: const Radius.circular(20),
+                topRight: const Radius.circular(20),
+                bottomLeft: isUser
+                    ? const Radius.circular(20)
+                    : const Radius.circular(4),
+                bottomRight: isUser
+                    ? const Radius.circular(4)
+                    : const Radius.circular(20),
+              ),
+              boxShadow: [
+                if (!isUser)
+                  BoxShadow(
+                      color: Colors.black.withOpacity(0.04),
+                      blurRadius: 4,
+                      offset: const Offset(0, 2))
+              ],
             ),
             child: MarkdownBody(
-              // Renders headers and bullets correctly
-              data: text,
+              data: text.replaceAll('**', ''), // Clean up excessive bolding
               styleSheet: MarkdownStyleSheet(
                 p: TextStyle(
                     color: isUser ? Colors.white : AppColors.textDark,
@@ -407,7 +411,6 @@ class _ChatScreenState extends State<ChatScreen> {
               label: const Text("Retry Connection",
                   style: TextStyle(fontSize: 12)),
               onPressed: () {
-                // Retrieve the last user message and try again
                 final lastUserMsg = _messages.reversed
                     .firstWhere((m) => m['sender'] == 'user')['text'];
                 _sendMessage(text: lastUserMsg);
@@ -475,7 +478,7 @@ class _ChatScreenState extends State<ChatScreen> {
         color: Colors.white,
         boxShadow: [
           BoxShadow(
-              color: Colors.black.withValues(alpha: 0.05),
+              color: Colors.black.withOpacity(0.05),
               offset: const Offset(0, -4),
               blurRadius: 10)
         ],
@@ -507,15 +510,17 @@ class _ChatScreenState extends State<ChatScreen> {
             const SizedBox(width: 12),
             FloatingActionButton(
               onPressed: _toggleMic,
-              backgroundColor: _isListening ? Colors.red : Colors.grey,
+              backgroundColor: _isListening ? Colors.red : Colors.grey.shade300,
+              elevation: 0,
               mini: true,
               child: Icon(_isListening ? Icons.stop : Icons.mic,
-                  color: Colors.white),
+                  color: _isListening ? Colors.white : Colors.black54),
             ),
-            const SizedBox(width: 12),
+            const SizedBox(width: 8),
             FloatingActionButton(
               onPressed: () => _sendMessage(),
               backgroundColor: AppColors.primary,
+              elevation: 0,
               mini: true,
               child: const Icon(Icons.send, color: Colors.white),
             ),

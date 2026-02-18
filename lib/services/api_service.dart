@@ -64,37 +64,10 @@ class ApiService {
       if (lower.contains(t)) return false;
     }
 
-    // Basic length check
-    if (botReply.length < 30) return false;
-
     // If the backend provides structured fields, prefer those as signal of quality
     if (decoded != null) {
       if ((decoded['response'] ?? '').toString().trim().isEmpty) return false;
-      // If server gives an explicit 'confidence' score and it's low, reject
-      if (decoded.containsKey('confidence')) {
-        try {
-          final c = double.tryParse(decoded['confidence'].toString()) ?? 1.0;
-          if (c < 0.4) return false;
-        } catch (_) {}
-      }
     }
-
-    // Require medical keywords (diagnosis/tests/prescription) to consider it a clinical reply
-    final medicalKeywords = [
-      'diagnosis',
-      'prescription',
-      'tests',
-      'lab',
-      'malaria',
-      'symptom',
-      'treatment',
-      'recommend'
-    ];
-    var found = 0;
-    for (var k in medicalKeywords) {
-      if (lower.contains(k)) found++;
-    }
-    if (found == 0) return false;
 
     return true;
   }

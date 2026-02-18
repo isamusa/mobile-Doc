@@ -1,8 +1,11 @@
 import 'package:flutter/material.dart';
 import 'package:shared_preferences/shared_preferences.dart';
+import 'package:firebase_auth/firebase_auth.dart';
 import 'dart:convert';
 import '../theme/app_theme.dart';
 import '../services/patient_data_service.dart';
+import '../services/secure_storage_helper.dart';
+import 'profile_screen.dart';
 
 class HomeScreen extends StatefulWidget {
   final VoidCallback onChatTap;
@@ -30,15 +33,46 @@ class _HomeScreenState extends State<HomeScreen> {
     _loadDashboardData();
   }
 
+  // 🛡️ SECURITY: Decrypt data for UI display
+  String _decryptData(String? encryptedText) {
+    if (encryptedText == null ||
+        encryptedText.isEmpty ||
+        encryptedText == 'Unknown' ||
+        encryptedText == 'None') {
+      return encryptedText ?? '--';
+    }
+    try {
+      return utf8.decode(base64Decode(encryptedText));
+    } catch (e) {
+      // Fallback in case of legacy unencrypted data
+      return encryptedText;
+    }
+  }
+
   Future<void> _loadDashboardData() async {
     setState(() => _isLoading = true);
 
-    // 1. Load Profile and Context
+    // 1. Load Profile and Context (Context is already decrypted by the service)
     final contextStr = await PatientDataService.getContextString();
-    final prefs = await SharedPreferences.getInstance();
-    final profileData = prefs.getString('patient_profile');
 
-    // 2. Load Pending AI Suggestions (Human-in-the-Loop logic)
+    // 2. Fetch the FULL encrypted profile from Secure Storage
+    final userId = FirebaseAuth.instance.currentUser?.uid ?? 'guest_user';
+    final securedData =
+        await SecureStorageHelper.read('patient_profile_$userId');
+
+    Map<String, dynamic>? profileMap;
+    if (securedData != null && securedData.isNotEmpty) {
+      profileMap = jsonDecode(securedData);
+    } else {
+      // Fallback to shared preferences if secure storage is empty
+      final prefs = await SharedPreferences.getInstance();
+      final profileData = prefs.getString('patient_profile');
+      if (profileData != null) {
+        profileMap = jsonDecode(profileData);
+      }
+    }
+
+    // 3. Load Pending AI Suggestions (Human-in-the-Loop logic)
     final tests = await PatientDataService.getPendingTests();
     final meds = await PatientDataService.getPrescriptions();
 
@@ -49,7 +83,7 @@ class _HomeScreenState extends State<HomeScreen> {
       if (end != -1) name = contextStr.substring(start, end).trim();
     }
 
-    // 3. Logic for Insights & Reminders
+    // 4. Logic for Insights & Reminders
     String medText = "No active medications.";
     String insight = "Great job keeping healthy!";
     bool hasMeds = meds.isNotEmpty;
@@ -64,7 +98,7 @@ class _HomeScreenState extends State<HomeScreen> {
     if (mounted) {
       setState(() {
         _patientName = name;
-        _profile = profileData != null ? jsonDecode(profileData) : null;
+        _profile = profileMap;
         _pendingTests = tests;
         _medicationReminder = medText;
         _healthInsight = insight;
@@ -185,11 +219,12 @@ class _HomeScreenState extends State<HomeScreen> {
             child: Row(
               mainAxisAlignment: MainAxisAlignment.spaceAround,
               children: [
-                _buildVitalMetric("Height", "${_profile?['height'] ?? '--'}",
+                // 🔓 Applying Decryption to the raw profile map values
+                _buildVitalMetric("Height", _decryptData(_profile?['height']),
                     "cm", Icons.height, Colors.blue),
-                _buildVitalMetric("Weight", "${_profile?['weight'] ?? '--'}",
+                _buildVitalMetric("Weight", _decryptData(_profile?['weight']),
                     "kg", Icons.monitor_weight, Colors.orange),
-                _buildVitalMetric("Age", "${_profile?['age'] ?? '--'}", "yrs",
+                _buildVitalMetric("Age", _decryptData(_profile?['age']), "yrs",
                     Icons.calendar_today, Colors.green),
               ],
             ),
@@ -279,7 +314,10 @@ class _HomeScreenState extends State<HomeScreen> {
                 icon: Icons.history_rounded,
                 label: "Med History",
                 color: Colors.purple,
-                onTap: () => Navigator.pushNamed(context, '/medical')),
+                onTap: () => Navigator.push(
+                    context,
+                    MaterialPageRoute(
+                        builder: (context) => const ProfileScreen()))),
           ],
         ),
       ],

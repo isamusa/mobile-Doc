@@ -60,13 +60,13 @@ class _ProfileScreenState extends State<ProfileScreen>
             const SizedBox(height: 10),
             TextField(
               controller: urlController,
+              style: TextStyle(color: AppColors.textDark, fontSize: 14),
               decoration: InputDecoration(
                 hintText: "https://your-url.ngrok.app",
                 border:
                     OutlineInputBorder(borderRadius: BorderRadius.circular(8)),
                 contentPadding: const EdgeInsets.symmetric(horizontal: 12),
               ),
-              style: const TextStyle(fontSize: 14),
             ),
           ],
         ),
